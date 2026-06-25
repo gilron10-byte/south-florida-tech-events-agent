@@ -1,0 +1,25 @@
+# Public pages to scan for South Florida technology events.
+# Add/remove URLs without changing code. Optional fields are supported:
+# - name: Human-friendly source name
+# - url: Public events page
+# - event_selector: CSS selector for event cards/rows (optional)
+# - title_selector, date_selector, location_selector, link_selector: CSS selectors inside each card (optional)
+# - max_events: Limit events read from this source (optional)
+sources:
+  - name: Refresh Miami Events
+    url: https://refreshmiami.com/events/
+    event_selector: article
+    max_events: 20
+  - name: Tech Hub South Florida Events
+    url: https://techhubsouthflorida.org/events/
+    event_selector: article
+    max_events: 20
+  - name: Eventbrite Miami Tech Events
+    url: https://www.eventbrite.com/d/fl--miami/technology--events/
+    max_events: 15
+  - name: Eventbrite Fort Lauderdale Tech Events
+    url: https://www.eventbrite.com/d/fl--fort-lauderdale/technology--events/
+    max_events: 15
+  - name: Eventbrite West Palm Beach Tech Events
+    url: https://www.eventbrite.com/d/fl--west-palm-beach/technology--events/
+    max_events: 15
