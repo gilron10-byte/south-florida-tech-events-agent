@@ -20,6 +20,7 @@ SOURCES_FILE = ROOT / "sources.yaml"
 OUTPUT_FILE = ROOT / "output" / "weekly_digest.md"
 EASTERN_TZ = ZoneInfo("America/New_York")
 SEEN_EVENTS_FILE = ROOT / "data" / "seen_events.json"
+LAST_SUCCESSFUL_EVENTS_FILE = ROOT / "data" / "last_successful_events.json"
 
 TARGET_CITIES = {
     "miami": 4,
@@ -125,10 +126,25 @@ class Event:
         return hashlib.sha256(f"{self.title}|{self.url}".encode()).hexdigest()[:16]
 
 
+@dataclass
+class RunDiagnostics:
+    sources_fetched_successfully: list[str]
+    sources_skipped: list[str]
+    raw_events_found: int = 0
+    events_after_filtering: int = 0
+    events_after_deduplication: int = 0
+    fallback_cache_used: bool = False
+    fallback_reason: str = ""
+
+
 def load_sources() -> list[dict[str, Any]]:
     with SOURCES_FILE.open("r", encoding="utf-8") as file:
         config = yaml.safe_load(file) or {}
     return config.get("sources", [])
+
+
+def source_name(source: dict[str, Any]) -> str:
+    return source.get("name", source.get("url", "Unknown source"))
 
 
 def text_or_empty(node: Any) -> str:
@@ -353,6 +369,62 @@ def load_seen_event_ids() -> set[str]:
     return set(data.get("seen_event_ids", [])) if isinstance(data, dict) else set()
 
 
+def event_to_dict(event: Event) -> dict[str, Any]:
+    return {
+        "title": event.title,
+        "url": event.url,
+        "source": event.source,
+        "date_text": event.date_text,
+        "location": event.location,
+        "summary": event.summary,
+        "parsed_date": event.parsed_date.isoformat() if event.parsed_date else None,
+        "score": event.score,
+        "recurring_count": event.recurring_count,
+    }
+
+
+def event_from_dict(data: dict[str, Any]) -> Event:
+    parsed_date = None
+    if data.get("parsed_date"):
+        try:
+            parsed_date = datetime.fromisoformat(data["parsed_date"])
+        except ValueError:
+            parsed_date = parse_date(data.get("date_text", ""))
+    return Event(
+        title=str(data.get("title", "")),
+        url=str(data.get("url", "")),
+        source=str(data.get("source", "Fallback cache")),
+        date_text=str(data.get("date_text", "")),
+        location=str(data.get("location", "")),
+        summary=str(data.get("summary", "")),
+        parsed_date=parsed_date,
+        score=int(data.get("score", 0)),
+        recurring_count=int(data.get("recurring_count", 1)),
+    )
+
+
+def save_last_successful_events(events: list[Event]) -> None:
+    LAST_SUCCESSFUL_EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "events": [event_to_dict(event) for event in events],
+    }
+    LAST_SUCCESSFUL_EVENTS_FILE.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def load_last_successful_events() -> list[Event]:
+    if not LAST_SUCCESSFUL_EVENTS_FILE.exists():
+        return []
+    try:
+        data = json.loads(LAST_SUCCESSFUL_EVENTS_FILE.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    events_data = data.get("events", []) if isinstance(data, dict) else data
+    if not isinstance(events_data, list):
+        return []
+    return [event_from_dict(item) for item in events_data if isinstance(item, dict)]
+
+
 def format_date(event: Event) -> str:
     recurring_note = " (recurring event; next listed instance)" if event.recurring_count > 1 else ""
     if event.parsed_date:
@@ -423,19 +495,16 @@ def suggested_action(event: Event) -> str:
     return "Track only"
 
 
-def write_digest(events: list[Event], errors: list[str]) -> None:
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    lines = [
-        "# South Florida Tech Events Weekly Digest",
-        "",
-        f"Generated: {generated_at}",
-        "",
-        "Executive focus: business-development opportunities for a cloud consulting company across Miami, Fort Lauderdale, Boca Raton, and West Palm Beach.",
-        "",
-    ]
-
-    if events:
+def write_event_sections(lines: list[str], events: list[Event], fallback: bool = False) -> None:
+    if fallback:
+        lines.extend([
+            "## Fallback: last known relevant events",
+            "",
+            "Current sources failed or produced no usable events, so this section uses events saved from the previous successful run. Confirm dates and availability before outreach.",
+            "",
+        ])
+        section_events = events
+    else:
         top_events = top_recommendations(events)
         lines.extend(["## Top 3 Recommendations", ""])
         for index, event in enumerate(top_events, start=1):
@@ -455,26 +524,58 @@ def write_digest(events: list[Event], errors: list[str]) -> None:
         for event in top_events:
             lines.append(f"- {suggested_action(event)} for {event.title}.")
         lines.append("")
-
         lines.extend(["## Prioritized Events", ""])
-        for index, event in enumerate(events, start=1):
-            lines.extend([
-                f"### {index}. {event.title}",
-                f"- **Event name:** {event.title}",
-                f"- **Date and time:** {format_date(event)}",
-                f"- **Location:** {event.location or 'Location not listed'}",
-                f"- **Source:** {event.source}",
-                f"- **URL:** {event.url}",
-                f"- **Relevance score:** {event.score}/10",
-                f"- **Why this matters for a cloud consulting company:** {why_this_matters(event)}",
-                f"- **Suggested action:** {suggested_action(event)}",
-                "",
-            ])
+        section_events = events
+
+    for index, event in enumerate(section_events, start=1):
+        lines.extend([
+            f"### {index}. {event.title}",
+            f"- **Event name:** {event.title}",
+            f"- **Date and time:** {format_date(event)}",
+            f"- **Location:** {event.location or 'Location not listed'}",
+            f"- **Source:** {event.source}",
+            f"- **URL:** {event.url}",
+            f"- **Relevance score:** {event.score}/10",
+            f"- **Why this matters for a cloud consulting company:** {why_this_matters(event)}",
+            f"- **Suggested action:** {suggested_action(event)}",
+            "",
+        ])
+
+
+def write_digest(events: list[Event], errors: list[str], diagnostics: RunDiagnostics, fallback_events: list[Event] | None = None) -> None:
+    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [
+        "# South Florida Tech Events Weekly Digest",
+        "",
+        f"Generated: {generated_at}",
+        "",
+        "Executive focus: business-development opportunities for a cloud consulting company across Miami, Fort Lauderdale, Boca Raton, and West Palm Beach.",
+        "",
+    ]
+
+    if events:
+        write_event_sections(lines, events)
+    elif fallback_events:
+        lines.extend([
+            "## Top 3 Recommendations",
+            "",
+            "No fresh qualifying events were available from this run, but source failures occurred and cached events exist.",
+            "",
+        ])
+        write_event_sections(lines, fallback_events, fallback=True)
     else:
+        if diagnostics.sources_skipped:
+            reason = "One or more sources failed or were skipped, and no fallback cache was available."
+        elif diagnostics.raw_events_found and diagnostics.events_after_filtering == 0:
+            reason = "Sources returned raw items, but the event filters removed them as non-events, generic pages, duplicates, or low-relevance listings."
+        else:
+            reason = "All enabled sources were fetched, but they did not expose any raw event cards to the scraper."
         lines.extend([
             "## Top 3 Recommendations",
             "",
             "No qualifying business-development events were found in this run.",
+            f"Reason: {reason}",
             "",
             "## Recommended next steps",
             "",
@@ -491,11 +592,23 @@ def write_digest(events: list[Event], errors: list[str]) -> None:
         lines.extend(["", "## Source notes", ""])
         lines.extend(f"- {error}" for error in errors)
         lines.append("")
+    lines.extend([
+        "## Run diagnostics",
+        "",
+        f"- **Sources fetched successfully:** {', '.join(diagnostics.sources_fetched_successfully) if diagnostics.sources_fetched_successfully else 'None'}",
+        f"- **Sources skipped:** {', '.join(diagnostics.sources_skipped) if diagnostics.sources_skipped else 'None'}",
+        f"- **Number of raw events found:** {diagnostics.raw_events_found}",
+        f"- **Number of events after filtering:** {diagnostics.events_after_filtering}",
+        f"- **Number of events after deduplication:** {diagnostics.events_after_deduplication}",
+        f"- **Fallback cache was used:** {'Yes' if diagnostics.fallback_cache_used else 'No'}",
+    ])
+    if diagnostics.fallback_reason:
+        lines.append(f"- **Fallback reason:** {diagnostics.fallback_reason}")
     OUTPUT_FILE.write_text("\n".join(lines), encoding="utf-8")
 
 
 def source_note(source: dict[str, Any], exc: requests.RequestException) -> str:
-    name = source.get("name", source.get("url", "Unknown source"))
+    name = source_name(source)
     status = getattr(exc.response, "status_code", None)
     if status:
         return f"{name} was skipped because the public event page was unavailable to the scraper this run."
@@ -506,20 +619,38 @@ def main() -> None:
     sources = load_sources()
     seen_event_ids = load_seen_event_ids()
     errors: list[str] = []
+    diagnostics = RunDiagnostics(sources_fetched_successfully=[], sources_skipped=[])
     events_by_id: dict[str, Event] = {}
 
     for source in sources:
+        if source.get("enabled", True) is False:
+            diagnostics.sources_skipped.append(f"{source_name(source)} (disabled)")
+            continue
         try:
-            for event in fetch_source(source):
+            fetched_events = fetch_source(source)
+            diagnostics.sources_fetched_successfully.append(source_name(source))
+            diagnostics.raw_events_found += len(fetched_events)
+            for event in fetched_events:
                 event.score = score_event(event)
                 if event.event_id not in seen_event_ids and keep_event(event):
                     events_by_id[event.event_id] = event
         except requests.RequestException as exc:
+            diagnostics.sources_skipped.append(source_name(source))
             errors.append(source_note(source, exc))
 
+    diagnostics.events_after_filtering = len(events_by_id)
     unique_events = deduplicate_recurring_events(list(events_by_id.values()))
+    diagnostics.events_after_deduplication = len(unique_events)
     events = sorted(unique_events, key=lambda event: (-event.score, event.parsed_date or datetime.max.replace(tzinfo=timezone.utc), event.title.lower()))[:25]
-    write_digest(events, errors)
+    fallback_events: list[Event] = []
+    if events:
+        save_last_successful_events(events)
+    elif errors:
+        fallback_events = load_last_successful_events()
+        if fallback_events:
+            diagnostics.fallback_cache_used = True
+            diagnostics.fallback_reason = "No fresh events were found while one or more sources failed or were skipped."
+    write_digest(events, errors, diagnostics, fallback_events)
     print(f"Wrote {OUTPUT_FILE.relative_to(ROOT)} with {len(events)} event(s).")
 
 
