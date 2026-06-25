@@ -13,7 +13,7 @@ The digest is aimed at a cloud services company looking for business-development
 - Adds event-specific business-development rationale, suggested actions, and short recommended next steps.
 - Writes the result to `output/weekly_digest.md`.
 - Keeps a placeholder tracking file at `data/seen_events.json` for future deduping/history improvements.
-- Does **not** use email, Slack, paid APIs, or secrets.
+- Does **not** use email or Slack. Eventbrite Search Discovery is optional and is enabled only when `SEARCH_API_KEY` is provided locally or as a GitHub Actions repository secret.
 
 ## Quick start for a non-technical user
 
@@ -140,7 +140,7 @@ To run it manually:
 4. Click **Run workflow**.
 5. Download the generated `weekly-digest` artifact from the workflow run.
 
-The workflow runs manually and on a weekly Monday schedule. Each run uploads `output/weekly_digest.md` as the `weekly-digest` artifact.
+The workflow runs manually and on a weekly Monday schedule. Each run uploads `output/weekly_digest.md` as the `weekly-digest` artifact. To enable Eventbrite Search Discovery in GitHub Actions, add `SEARCH_API_KEY` as a repository secret; optionally add `SEARCH_API_URL` to use a SerpAPI-compatible endpoint other than the Python default. If either secret is omitted, the workflow still runs: missing `SEARCH_API_KEY` skips Eventbrite discovery gracefully, and missing `SEARCH_API_URL` leaves the script on its default SerpAPI URL.
 
 ## Notes and limitations
 
