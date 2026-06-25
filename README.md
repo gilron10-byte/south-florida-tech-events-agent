@@ -1,163 +1,249 @@
-# South Florida Tech Events Agent
+# Tech Events Intelligence Agent
 
-A very simple Python MVP that finds public South Florida tech events and writes a weekly Markdown digest.
+This agent finds public technology events and writes weekly Markdown digests for separate markets. It started as a South Florida Tech Events Agent and now supports multiple markets without mixing their recommendations.
 
-The digest is aimed at a cloud services company looking for business-development, partnership, customer, founder, AWS/Azure, and local tech networking opportunities.
+## 1. What the agent does
 
-## What it does
+- Finds events from trusted public event pages and optional web search discovery.
+- Scores events for a cloud services / technology business-development audience.
+- Creates a separate digest for each market:
+  - Top 3 Recommendations
+  - Recommended next steps
+  - Prioritized Events
+  - Candidates to review
+  - Source notes
+  - Run diagnostics
+- Creates an optional global summary with only each market's Top 3 and a path to the full digest.
+- Keeps Eventbrite direct scraping disabled by default because Eventbrite often blocks automated city/category pages.
+- Uses Eventbrite only through `SEARCH_API_KEY`-backed search discovery.
+- Does **not** send Slack messages or email.
 
-- Reads public event pages from `sources.yaml`.
-- Looks for events around Miami, Miami Beach, Fort Lauderdale, Boca Raton, and West Palm Beach.
-- Prioritizes topics such as AI, cloud, AWS, Azure, startups, cybersecurity, SaaS, DevOps, data, product, and engineering.
-- Uses a simple 1-10 relevance score and places the best opportunities in a Top 3 Recommendations section.
-- Adds event-specific business-development rationale, suggested actions, and short recommended next steps.
-- Writes the result to `output/weekly_digest.md`.
-- Keeps a placeholder tracking file at `data/seen_events.json` for future deduping/history improvements.
-- Does **not** use email or Slack. Eventbrite Search Discovery is optional and is enabled only when `SEARCH_API_KEY` is provided locally or as a GitHub Actions repository secret.
+## 2. Configured markets
 
-## Quick start for a non-technical user
+Markets live in `markets.yaml`.
 
-### 1. Install Python
+The initial markets are:
 
-Install Python 3.11 from [python.org](https://www.python.org/downloads/) if it is not already installed.
+1. **South Florida**
+   - Miami
+   - Miami Beach
+   - Fort Lauderdale
+   - Boca Raton
+   - West Palm Beach
+   - Palm Beach
+   - South Florida
+2. **New York**
+   - New York
+   - Manhattan
+   - Brooklyn
+   - Queens
+   - Jersey City
+3. **Tel Aviv**
+   - Tel Aviv
+   - Herzliya
+   - Ramat Gan
+   - Givatayim
+   - Ra'anana
+   - Petah Tikva
+   - Israel
 
-### 2. Download this project
-
-Download or clone this repository to your computer.
-
-### 3. Open a terminal in the project folder
-
-On macOS, open Terminal. On Windows, open PowerShell. Navigate to the folder containing this README.
-
-### 4. Install the required packages
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-### 5. Run the event finder
-
-```bash
-python src/main.py
-```
-
-### 6. Open the digest
-
-Open this file after the command finishes:
+Generated files:
 
 ```text
-output/weekly_digest.md
+output/south_florida_weekly_digest.md
+output/new_york_weekly_digest.md
+output/tel_aviv_weekly_digest.md
+output/global_weekly_summary.md
 ```
 
-You can copy the Markdown into a document, email draft, CRM note, or internal planning tool.
+## 3. How to add a new market
 
-## How relevance scoring works
+Open `markets.yaml` and copy one existing market block.
 
-Each event receives a simple **1-10 relevance score** for a cloud consulting company focused on AWS, Azure, AI, DevOps, cybersecurity, SaaS, startups, and enterprise technology.
-
-The score is intentionally directional rather than scientific:
-
-- **8-10:** High-priority business-development opportunity. These events usually combine strong topics such as AWS, Azure, cloud, AI/agentic workflows, cybersecurity, DevOps, data, SaaS, enterprise technology, or product/engineering leadership with signs of senior decision makers, founders, investors, customers, partners, or conference/summit-style networking.
-- **5-7:** Worth a targeted follow-up. These events may be good places to send an account executive or technical person, especially when they are in Miami, Fort Lauderdale, Boca Raton, West Palm Beach, or another South Florida market.
-- **1-4:** Low priority. These are often generic social events, consumer-oriented events, student-only events, events with unclear technology/business audiences, or listings with missing location/detail.
-
-The script scores separate event fields instead of treating every scraped word equally:
-
-- **Title:** highest weight, because it is usually the cleanest indicator of audience and topic.
-- **Location:** moderate weight, especially for Miami, Fort Lauderdale, Boca Raton, West Palm Beach, and nearby South Florida markets.
-- **Cleaned summary/description:** lower weight after duplicate title/date/location fragments are removed, which prevents repeated website boilerplate from dominating the score.
-
-The script classifies events into practical sales-coverage types:
-
-- **Executive/buyer:** CTO, CPO, CIO, CISO, chief, VP, director, product leader, engineering leader, and similar senior audience signals.
-- **Strategic technical:** AI, agentic workflows, cloud, AWS, Azure, DevOps, cybersecurity, data, SaaS, and related delivery topics.
-- **Startup/founder:** founder, startup, VC, fintech, SaaS, and investor-oriented signals.
-- **Generic networking:** networking, connect, happy hour, mixer, recurring meetup, broad community event, and similar broad-coverage signals.
-
-The script increases scores for:
-
-- Executive/buyer events, especially when senior audience terms appear in the title.
-- Strategic AI, agentic, cloud, AWS, Azure, cybersecurity, DevOps, data, SaaS, product, and engineering events.
-- Startup/founder events when they are tied to AI, fintech, SaaS, cloud, or enterprise technology.
-- Events in Miami, Fort Lauderdale, Boca Raton, West Palm Beach, and nearby South Florida locations.
-
-The script lowers scores for:
-
-- Generic recurring networking events, broad mixers, generic social events, parties, consumer events, concerts, festivals, student-only events, and career fairs.
-- Events with no clear technology/business audience.
-- Events with missing locations unless the title and audience are highly relevant.
-
-Generic recurring networking is capped at **6/10** unless the title clearly includes executive/buyer, founder, enterprise, or strategic technical terms. Suggested actions also reflect the classification: executive/buyer events at 7+ recommend personal attendance, focused AI/cloud/startup events at 6+ recommend senior AE or technical coverage, and broad recurring networking recommends AE coverage or tracking rather than personal attendance.
-
-## Changing event sources
-
-Open `sources.yaml` and add or remove public event pages.
-
-Each source needs at least:
+Change these fields:
 
 ```yaml
-sources:
-  - name: Example Events Page
-    url: https://example.com/events/
+- id: boston
+  name: Boston
+  timezone: America/New_York
+  cities: [Boston, Cambridge, Somerville]
+  output_file: output/boston_weekly_digest.md
+  cache_file: data/boston_last_successful_events.json
+  primary_sources: []
+  discovery_groups: []
 ```
 
-Optional fields let you make scraping more accurate if a site has predictable HTML:
+Use a unique `id`, output file, and cache file for each market.
+
+## 4. How to add cities to a market
+
+Edit the market's `cities` list in `markets.yaml`:
 
 ```yaml
-sources:
-  - name: Example Events Page
+cities:
+  - Miami
+  - Fort Lauderdale
+  - Boca Raton
+```
+
+The agent uses these cities for market matching, filtering, and scoring.
+
+## 5. How to add primary sources
+
+Primary sources are clean public event pages that can be fetched directly.
+
+Example:
+
+```yaml
+primary_sources:
+  - name: Example Events
     url: https://example.com/events/
     event_selector: article
-    title_selector: h2
-    date_selector: time
-    location_selector: .location
-    link_selector: a
     max_events: 20
 ```
 
-Eventbrite city/category pages are intentionally disabled by default because they often reject automated requests. To supplement the primary sources without scraping Eventbrite search pages directly, configure a `type: search_discovery` source and set `SEARCH_API_KEY` in the environment. The default JSON search endpoint is SerpAPI-compatible, and `SEARCH_API_URL` can point to a compatible provider. If `SEARCH_API_KEY` is missing, Eventbrite search discovery is skipped gracefully.
-
-Search-discovered Eventbrite listings are kept only when their URL contains `eventbrite.com/e/`. If the individual Eventbrite event page can be fetched normally, the script enriches the candidate; if not, it still includes the search title/snippet as a low-confidence candidate.
+Optional selectors can improve parsing:
 
 ```yaml
-sources:
-  - name: Eventbrite Search Discovery
-    type: search_discovery
-    max_events: 25
-    queries:
-      - 'site:eventbrite.com/e/ Miami AI startup cloud'
+title_selector: h2
+ date_selector: time
+location_selector: .location
+link_selector: a
 ```
 
-## Running with GitHub Actions
+South Florida keeps **Refresh Miami Events** and **Tech Hub South Florida Events** as high-confidence primary sources because they are local, relevant, public South Florida tech calendars.
 
-A GitHub Actions workflow is included at `.github/workflows/weekly-digest.yml`.
+## 6. How to add discovery queries
 
-To run it manually:
+Discovery groups use web search and should be used for broad sources such as Luma, Meetup, Eventbrite, cloud providers, universities, cybersecurity, Israeli/Jewish business communities, and startup ecosystems.
+
+Example:
+
+```yaml
+discovery_groups:
+  - name: Luma / lu.ma Discovery
+    type: search_discovery
+    category: Luma
+    max_events: 25
+    results_per_query: 10
+    queries:
+      - site:lu.ma Miami AI startup founder cloud
+      - site:lu.ma Miami founders VC AI
+```
+
+If one query returns no results, the group continues and keeps partial results from successful queries.
+
+## 7. How `SEARCH_API_KEY` enables search discovery
+
+Set `SEARCH_API_KEY` to enable `type: search_discovery` groups. The default endpoint is SerpAPI-compatible.
+
+Without `SEARCH_API_KEY`:
+
+- Primary sources still run.
+- Search discovery groups are skipped gracefully.
+- The workflow still succeeds.
+
+## 8. `SEARCH_API_URL` is optional
+
+`SEARCH_API_URL` can point to a compatible JSON search API endpoint. If it is missing or invalid, the agent uses the default SerpAPI endpoint:
+
+```text
+https://serpapi.com/search.json
+```
+
+The agent redacts API keys in logs and never writes secrets to the digest.
+
+## 9. Why South Florida primary sources are high confidence
+
+Refresh Miami and Tech Hub South Florida are high-confidence for South Florida because they are direct local technology event calendars. Search results are lower confidence because they may point to directory pages, stale pages, generic webinars, or pages without a clear date/location.
+
+## 10. Why search-discovered results are lower confidence
+
+Search-discovered results must be verified before they can be trusted. A search snippet may have a relevant title but no confirmed event date or location. Those items go into **Candidates to review** unless the agent can identify a clear title, URL, date or event-like snippet, market relevance, and relevance score of at least 6.
+
+Low-confidence results do not enter the Top 3 unless they are promoted with clear date, location, strong relevance, and market match.
+
+## 11. How to run locally
+
+```bash
+python -m pip install -r requirements.txt
+python src/main.py
+```
+
+Then open the files in `output/`.
+
+## 12. How to run the workflow manually
 
 1. Go to the repository on GitHub.
 2. Click **Actions**.
 3. Select **Generate weekly event digest**.
 4. Click **Run workflow**.
-5. Download the generated `weekly-digest` artifact from the workflow run.
+5. Wait for the run to finish.
 
-The workflow runs manually and on a weekly Monday schedule. Each run uploads `output/weekly_digest.md` as the `weekly-digest` artifact. To enable Eventbrite Search Discovery in GitHub Actions, add `SEARCH_API_KEY` as a repository secret; optionally add `SEARCH_API_URL` to use a SerpAPI-compatible endpoint other than the Python default. If either secret is omitted, the workflow still runs: missing `SEARCH_API_KEY` skips Eventbrite discovery gracefully, and missing `SEARCH_API_URL` leaves the script on its default SerpAPI URL.
+## 13. Where to download artifacts
 
-## Notes and limitations
+The GitHub Actions workflow uploads all Markdown digests as one artifact named `weekly-digest` using:
 
-This is intentionally a simple MVP:
+```text
+output/*.md
+```
 
-- Public websites can change their layout, so some sources may occasionally return fewer results.
-- Some event cards do not include dates or locations in their listing preview.
-- The script fetches only public pages and does not use private APIs or secrets.
-- The scoring is keyword-based and can be improved later with better source-specific parsers or enrichment.
+Open the completed workflow run and download the artifact.
+
+## 14. How to interpret the digest
+
+- **Top 3 Recommendations**: Best market-specific events for action. Each market has its own Top 3.
+- **Recommended next steps**: Suggested coverage plan such as attend personally, send senior AE, send technical person, send AE, track only, or review manually.
+- **Prioritized Events**: Higher-confidence events that passed filtering and scoring.
+- **Candidates to review**: Lower-confidence search results grouped by source/category. Review manually before using.
+- **Confidence**:
+  - `high`: direct source or verified date/location.
+  - `medium`: useful but partially verified.
+  - `low`: search-discovered and missing important details.
+- **Diagnostics**: Shows sources, skipped groups, search queries, candidate counts, cloud provider counts, fallback cache usage, and Eventbrite status.
+
+## 15. How to add AWS / GCP / Microsoft event queries
+
+Add queries to a market's `Cloud Provider Events` discovery group:
+
+```yaml
+- name: Cloud Provider Events
+  type: search_discovery
+  category: Cloud / Hyperscaler
+  queries:
+    - site:aws.amazon.com/events Miami AWS startup
+    - site:cloud.google.com/events Miami Google Cloud AI startup
+    - site:events.microsoft.com Miami Azure AI
+```
+
+The agent gives extra scoring weight to AWS, Google Cloud, GCP, Microsoft, Azure, Microsoft for Startups, Google for Startups, AWS Startups, GenAI, AI, startup, ISV, SaaS, partner, migration, modernization, security, data, and DevOps.
+
+## 16. How to add Israeli / Jewish business and tech queries
+
+Add queries to the market's Israeli/Jewish business and tech discovery group:
+
+```yaml
+- name: Israeli / Jewish Business & Tech Discovery
+  type: search_discovery
+  category: Israeli / Jewish Business & Tech
+  queries:
+    - Israeli founders New York tech events
+    - Jewish business networking Miami tech
+    - Israeli tech startup events Tel Aviv
+```
+
+These events rank well only when they have clear business, founder, investor, cloud, cybersecurity, AI, SaaS, or enterprise technology relevance.
 
 ## Project structure
 
 ```text
-src/main.py                 Main Python script
-sources.yaml                Configurable public event source list
-data/seen_events.json       Placeholder for future event tracking
-output/weekly_digest.md     Generated digest
-.github/workflows/          GitHub Actions workflow
-requirements.txt            Python dependencies
+src/main.py                              Main Python script
+markets.yaml                            Multi-market configuration
+sources.yaml                            Legacy South Florida source config fallback
+data/*_last_successful_events.json      Per-market fallback caches
+output/*_weekly_digest.md               Per-market generated digests
+output/global_weekly_summary.md         Combined Top 3 summary
+.github/workflows/weekly-digest.yml     Weekly/manual GitHub Actions workflow
+tests/smoke_test.py                     Smoke tests
+requirements.txt                        Python dependencies
 ```

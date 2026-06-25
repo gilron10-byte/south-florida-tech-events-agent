@@ -243,3 +243,92 @@ def test_low_confidence_eventbrite_does_not_outrank_high_confidence_primary_sour
     eventbrite.score = 10
 
     assert sorted([eventbrite, primary], key=main.ranking_key)[0] is primary
+
+
+def test_multi_market_outputs_and_global_summary_are_generated(tmp_path, monkeypatch) -> None:
+    markets = [
+        {"id": "south_florida", "name": "South Florida", "timezone": "America/New_York", "cities": ["Miami"], "output_file": "output/south_florida_weekly_digest.md", "cache_file": "data/sf.json", "primary_sources": [], "discovery_groups": []},
+        {"id": "new_york", "name": "New York", "timezone": "America/New_York", "cities": ["New York"], "output_file": "output/new_york_weekly_digest.md", "cache_file": "data/ny.json", "primary_sources": [], "discovery_groups": []},
+        {"id": "tel_aviv", "name": "Tel Aviv", "timezone": "Asia/Jerusalem", "cities": ["Tel Aviv"], "output_file": "output/tel_aviv_weekly_digest.md", "cache_file": "data/ta.json", "primary_sources": [], "discovery_groups": []},
+    ]
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "GLOBAL_SUMMARY_FILE", tmp_path / "output" / "global_weekly_summary.md")
+    results = []
+    for market in markets:
+        event = main.Event(
+            title=f"{market['name']} AI Cloud Executive Summit",
+            url=f"https://example.com/{market['id']}",
+            source="Smoke Test",
+            date_text="July 10, 2026",
+            location=market["cities"][0],
+            summary="Executive founders discuss AI cloud startup cybersecurity SaaS modernization.",
+            parsed_date=main.parse_date("July 10, 2026"),
+            confidence="high",
+            market_id=market["id"],
+        )
+        event.score = main.score_event(event, market)
+        diagnostics = main.RunDiagnostics([], [], market_name=market["name"], events_after_deduplication=1)
+        main.write_digest([event], [], diagnostics, market=market, candidates=[])
+        results.append((market, [event], diagnostics))
+
+    main.write_global_summary(results)
+
+    assert (tmp_path / "output" / "south_florida_weekly_digest.md").exists()
+    assert (tmp_path / "output" / "new_york_weekly_digest.md").exists()
+    assert (tmp_path / "output" / "tel_aviv_weekly_digest.md").exists()
+    assert (tmp_path / "output" / "global_weekly_summary.md").exists()
+    sf_text = (tmp_path / "output" / "south_florida_weekly_digest.md").read_text()
+    assert "New York AI Cloud" not in sf_text
+
+
+def test_low_confidence_search_candidate_stays_out_of_top3() -> None:
+    market = {"id": "new_york", "name": "New York", "timezone": "America/New_York", "cities": ["New York"]}
+    candidate = main.Event(
+        title="New York AI Startup Cloud Event",
+        url="https://example.com/event/ai",
+        source="Luma / lu.ma Discovery",
+        summary="Relevant AI startup cloud event in New York but missing details.",
+        confidence="low",
+        market_id="new_york",
+        discovery_group="Luma / lu.ma Discovery",
+        is_candidate=True,
+    )
+    candidate.score = 10
+    primary = main.Event(
+        title="New York CTO AI Cloud Summit",
+        url="https://example.com/cto-ai-cloud-summit",
+        source="Primary",
+        date_text="July 12, 2026",
+        location="New York",
+        summary="CTO leaders discuss AI cloud modernization and cybersecurity.",
+        parsed_date=main.parse_date("July 12, 2026"),
+        confidence="high",
+        market_id="new_york",
+    )
+    primary.score = main.score_event(primary, market)
+    assert main.top_recommendations([candidate, primary], market=market) == [primary]
+    assert main.suggested_action(candidate) == "Review manually"
+
+
+def test_search_discovered_candidate_can_go_to_review() -> None:
+    market = {"id": "south_florida", "name": "South Florida", "timezone": "America/New_York", "cities": ["Miami"]}
+    event = main.Event(
+        title="Miami AWS Startup Cloud Event",
+        url="https://example.com/events/miami-aws-startup",
+        source="Cloud Provider Events",
+        summary="Miami AWS startup cloud event for SaaS founders.",
+        confidence="low",
+        market_id="south_florida",
+        discovery_group="Cloud Provider Events",
+        category="Cloud / Hyperscaler",
+    )
+    event.score = main.score_event(event, market)
+    event.missing_fields = main.missing_fields(event)
+    assert main.is_event_page(event)
+    assert not main.promote_search_event(event, market) or event.confidence == "low"
+    assert main.candidate_bucket(event) in {"AWS", "Cloud / Hyperscaler"}
+
+
+def test_workflow_uploads_all_markdown_outputs() -> None:
+    workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "weekly-digest.yml").read_text()
+    assert "path: output/*.md" in workflow
