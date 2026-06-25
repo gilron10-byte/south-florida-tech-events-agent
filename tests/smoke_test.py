@@ -8,6 +8,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src import main
 
 
+class FakeSearchResponse:
+    def __init__(self, status_code: int, payload: dict[str, object]) -> None:
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self) -> dict[str, object]:
+        return self._payload
+
+
 def make_event(title: str, summary: str = "AI cloud event for founders in Miami", date_text: str = "July 10, 2026", url: str | None = None) -> main.Event:
     event = main.Event(
         title=title,
@@ -170,6 +179,49 @@ def test_eventbrite_search_candidates_survive_failed_page_fetch(monkeypatch) -> 
     assert "eventbrite.com/e/" in events[0].url
     events[0].score = main.score_event(events[0])
     assert main.keep_event(events[0])
+
+
+def test_search_discovery_reports_safe_serpapi_errors(monkeypatch) -> None:
+    monkeypatch.setenv("SEARCH_API_KEY", "super-secret-key")
+    monkeypatch.setenv("SEARCH_API_URL", "https://serpapi.com/search.json")
+
+    def fake_get(url: str, **kwargs: object) -> FakeSearchResponse:
+        assert kwargs["params"]["api_key"] == "super-secret-key"  # type: ignore[index]
+        return FakeSearchResponse(429, {"error": "Account rate limit reached for this search."})
+
+    monkeypatch.setattr(main.requests, "get", fake_get)
+    diagnostics = main.RunDiagnostics(sources_fetched_successfully=[], sources_skipped=[])
+
+    try:
+        main.search_api_results("site:eventbrite.com/e/ Miami AI", 10, diagnostics)
+    except main.SearchDiscoveryError as exc:
+        note = main.source_note({"name": "Eventbrite Search Discovery", "type": "search_discovery"}, exc)
+    else:
+        raise AssertionError("SearchDiscoveryError was not raised")
+
+    assert "HTTP 429" in note
+    assert "Account rate limit reached" in note
+    assert "super-secret-key" not in note
+    assert diagnostics.search_api_endpoint_host == "serpapi.com"
+    assert diagnostics.search_queries_attempted == 1
+    assert diagnostics.search_api_responses_received == 1
+
+
+def test_malformed_search_api_url_falls_back_to_default(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("SEARCH_API_KEY", "super-secret-key")
+    monkeypatch.setenv("SEARCH_API_URL", "not a url")
+
+    def fake_get(url: str, **kwargs: object) -> FakeSearchResponse:
+        assert url == main.DEFAULT_SEARCH_API_URL
+        return FakeSearchResponse(200, {"organic_results": []})
+
+    monkeypatch.setattr(main.requests, "get", fake_get)
+    assert main.search_api_results("site:eventbrite.com/e/ Miami AI", 10) == []
+    captured = capsys.readouterr()
+
+    assert "https://serpapi.com/search.json" in captured.out
+    assert "api_key=%5BREDACTED%5D" in captured.out
+    assert "super-secret-key" not in captured.out
 
 
 def test_low_confidence_eventbrite_does_not_outrank_high_confidence_primary_source() -> None:
