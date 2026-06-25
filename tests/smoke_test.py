@@ -138,3 +138,56 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         test_fallback_cache_works_when_all_sources_fail(Path(tmp), MonkeyPatch())
     print("smoke tests passed")
+
+
+def test_eventbrite_search_candidates_survive_failed_page_fetch(monkeypatch) -> None:
+    monkeypatch.setenv("SEARCH_API_KEY", "test-key")
+
+    def fake_search_api_results(query: str, max_results: int) -> list[dict[str, str]]:
+        return [
+            {
+                "title": "Miami AI Startup Cloud Summit",
+                "url": "https://www.eventbrite.com/e/miami-ai-startup-cloud-summit-tickets-123",
+                "snippet": "Miami founders discuss AI, startup cloud architecture, AWS, Azure, and SaaS growth.",
+            },
+            {
+                "title": "Eventbrite directory page",
+                "url": "https://www.eventbrite.com/d/fl--miami/technology--events/",
+                "snippet": "Directory page should be ignored.",
+            },
+        ]
+
+    def fake_fetch_eventbrite_event_page(candidate: main.Event) -> main.Event:
+        raise main.requests.HTTPError("blocked")
+
+    monkeypatch.setattr(main, "search_api_results", fake_search_api_results)
+    monkeypatch.setattr(main, "fetch_eventbrite_event_page", fake_fetch_eventbrite_event_page)
+    events = main.fetch_search_discovery_source({"queries": ["site:eventbrite.com/e/ Miami AI startup cloud"], "max_events": 10})
+
+    assert len(events) == 1
+    assert events[0].source == "Eventbrite via Search"
+    assert events[0].confidence == "low"
+    assert "eventbrite.com/e/" in events[0].url
+    events[0].score = main.score_event(events[0])
+    assert main.keep_event(events[0])
+
+
+def test_low_confidence_eventbrite_does_not_outrank_high_confidence_primary_source() -> None:
+    primary = make_event(
+        "Miami AI Cloud Executive Summit",
+        summary="Executive technology leaders discuss AI, AWS, Azure, cloud modernization, cybersecurity, and SaaS platforms.",
+    )
+    primary.source = "Refresh Miami Events"
+    primary.confidence = "high"
+    primary.score = 8
+
+    eventbrite = make_event(
+        "Miami AI Cloud Executive Summit on Eventbrite",
+        summary="Executive technology leaders discuss AI, AWS, Azure, cloud modernization, cybersecurity, and SaaS platforms.",
+        url="https://www.eventbrite.com/e/miami-ai-cloud-executive-summit-tickets-456",
+    )
+    eventbrite.source = "Eventbrite via Search"
+    eventbrite.confidence = "low"
+    eventbrite.score = 10
+
+    assert sorted([eventbrite, primary], key=main.ranking_key)[0] is primary

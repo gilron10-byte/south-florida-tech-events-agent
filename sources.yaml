@@ -6,6 +6,7 @@
 # - title_selector, date_selector, location_selector, link_selector: CSS selectors inside each card (optional)
 # - max_events: Limit events read from this source (optional)
 # - enabled: false disables a fragile/optional source without deleting it
+# - type: search_discovery uses SEARCH_API_KEY-backed web search instead of direct page scraping
 sources:
   # Primary source: Refresh Miami is the most relevant public event calendar.
   - name: Refresh Miami Events
@@ -32,3 +33,17 @@ sources:
     url: https://www.eventbrite.com/d/fl--west-palm-beach/technology--events/
     max_events: 15
     enabled: false
+
+  # Optional Eventbrite discovery: searches for individual Eventbrite event pages
+  # instead of scraping Eventbrite city/category search pages directly. Set
+  # SEARCH_API_KEY to enable; direct Eventbrite scraping remains disabled above.
+  - name: Eventbrite Search Discovery
+    type: search_discovery
+    max_events: 25
+    results_per_query: 10
+    queries:
+      - 'site:eventbrite.com/e/ Miami AI startup cloud'
+      - 'site:eventbrite.com/e/ "Fort Lauderdale" AI startup tech'
+      - 'site:eventbrite.com/e/ "West Palm Beach" technology startup'
+      - 'site:eventbrite.com/e/ "Boca Raton" AI cloud SaaS'
+      - 'site:eventbrite.com/e/ Miami AWS Azure DevOps cybersecurity SaaS'

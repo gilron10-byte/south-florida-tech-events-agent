@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -120,6 +121,7 @@ class Event:
     parsed_date: datetime | None = None
     score: int = 0
     recurring_count: int = 1
+    confidence: str = "high"
 
     @property
     def event_id(self) -> str:
@@ -135,6 +137,9 @@ class RunDiagnostics:
     events_after_deduplication: int = 0
     fallback_cache_used: bool = False
     fallback_reason: str = ""
+    eventbrite_direct_scraping: str = "disabled"
+    eventbrite_search_discovery: str = "disabled"
+    eventbrite_candidates_found: int = 0
 
 
 def load_sources() -> list[dict[str, Any]]:
@@ -217,6 +222,100 @@ def fetch_source(source: dict[str, Any]) -> list[Event]:
     return events
 
 
+
+def is_eventbrite_event_url(url: str) -> bool:
+    return "eventbrite.com/e/" in url.lower()
+
+
+def search_api_results(query: str, max_results: int) -> list[dict[str, str]]:
+    """Return normalized web-search results from a JSON search API.
+
+    The default endpoint is SerpAPI's Google Search API because it accepts a
+    simple api_key/q contract. SEARCH_API_URL can override that endpoint for
+    compatible providers in tests or deployments.
+    """
+    api_key = os.environ.get("SEARCH_API_KEY", "").strip()
+    if not api_key:
+        return []
+    endpoint = os.environ.get("SEARCH_API_URL", "https://serpapi.com/search.json")
+    params = {"q": query, "api_key": api_key, "num": max_results}
+    response = requests.get(endpoint, params=params, headers={"User-Agent": USER_AGENT}, timeout=20)
+    response.raise_for_status()
+    payload = response.json()
+    containers = [
+        payload.get("organic_results"),
+        payload.get("results"),
+        payload.get("items"),
+        payload.get("webPages", {}).get("value") if isinstance(payload.get("webPages"), dict) else None,
+    ]
+    normalized: list[dict[str, str]] = []
+    for container in containers:
+        if not isinstance(container, list):
+            continue
+        for item in container:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("link") or item.get("url") or item.get("displayLink") or "")
+            title = str(item.get("title") or item.get("name") or "")
+            snippet = str(item.get("snippet") or item.get("description") or item.get("summary") or "")
+            if url and title:
+                normalized.append({"url": url, "title": title, "snippet": snippet})
+            if len(normalized) >= max_results:
+                return normalized
+        if normalized:
+            break
+    return normalized[:max_results]
+
+
+def fetch_eventbrite_event_page(candidate: Event) -> Event:
+    """Best-effort enrichment for an Eventbrite event URL.
+
+    Failures are intentionally allowed to bubble to the caller so the original
+    search title/snippet can remain as a low-confidence candidate.
+    """
+    response = requests.get(candidate.url, headers={"User-Agent": USER_AGENT}, timeout=20)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
+    meta = soup.select_one('meta[property="og:title"], meta[name="twitter:title"]')
+    title = str(meta.get("content", "")).strip() if meta else ""
+    title = title or first_text(soup, ["h1", "title"]) or candidate.title
+    summary_meta = soup.select_one('meta[property="og:description"], meta[name="description"]')
+    summary = str(summary_meta.get("content", "")).strip() if summary_meta else ""
+    summary = summary or candidate.summary
+    date_text = first_text(soup, ["time", '[class*=date]', '[class*=time]'])
+    location = first_text(soup, ['[class*=location]', '[class*=venue]', '[data-testid*=location]'])
+    confidence = "high" if date_text or location else "medium"
+    return Event(title[:180].strip(), candidate.url, "Eventbrite via Search", date_text, location, summary[:700], parse_date(date_text), confidence=confidence)
+
+
+def fetch_search_discovery_source(source: dict[str, Any]) -> list[Event]:
+    if not os.environ.get("SEARCH_API_KEY", "").strip():
+        return []
+    queries = source.get("queries") or []
+    max_events = int(source.get("max_events", 25))
+    per_query = max(1, int(source.get("results_per_query", 10)))
+    events_by_url: dict[str, Event] = {}
+    for query in queries:
+        for result in search_api_results(str(query), per_query):
+            url = result["url"]
+            if not is_eventbrite_event_url(url):
+                continue
+            candidate = Event(
+                title=result["title"][:180].strip(),
+                url=url,
+                source="Eventbrite via Search",
+                summary=result.get("snippet", "")[:700],
+                confidence="low",
+            )
+            try:
+                candidate = fetch_eventbrite_event_page(candidate)
+            except requests.RequestException:
+                pass
+            events_by_url.setdefault(url, candidate)
+            if len(events_by_url) >= max_events:
+                return list(events_by_url.values())
+    return list(events_by_url.values())
+
 def clean_text(value: str) -> str:
     """Normalize scraped text and remove duplicate fragments that can distort scoring."""
     normalized = re.sub(r"\s+", " ", value or "").strip()
@@ -283,6 +382,8 @@ def is_event_page(event: Event) -> bool:
     ]
     if any(term in haystack for term in generic_page_terms):
         return False
+    if event.source == "Eventbrite via Search" and is_eventbrite_event_url(event.url):
+        return bool(event.title.strip() and clean_summary(event).strip())
     return bool(event.date_text.strip() or event.location.strip())
 
 
@@ -403,6 +504,11 @@ def score_event(event: Event) -> int:
         elif event.parsed_date < now - timedelta(days=1):
             raw_score -= 8
 
+    if event.confidence == "low":
+        raw_score -= 18
+    elif event.confidence == "medium":
+        raw_score -= 6
+
     score = max(1, min(10, round(raw_score / 14)))
     if generic and not has_title_terms(event, EXECUTIVE_BUYER_TERMS + STRATEGIC_TECHNICAL_TERMS + STARTUP_FOUNDER_TERMS + ["enterprise"]):
         score = min(score, 6)
@@ -472,6 +578,7 @@ def event_to_dict(event: Event) -> dict[str, Any]:
         "parsed_date": event.parsed_date.isoformat() if event.parsed_date else None,
         "score": event.score,
         "recurring_count": event.recurring_count,
+        "confidence": event.confidence,
     }
 
 
@@ -492,6 +599,7 @@ def event_from_dict(data: dict[str, Any]) -> Event:
         parsed_date=parsed_date,
         score=int(data.get("score", 0)),
         recurring_count=int(data.get("recurring_count", 1)),
+        confidence=str(data.get("confidence", "high")),
     )
 
 
@@ -524,7 +632,7 @@ def format_date(event: Event) -> str:
     return (event.date_text or "Date/time not listed") + recurring_note
 
 
-def ranking_key(event: Event) -> tuple[int, int, int, int, datetime, str]:
+def ranking_key(event: Event) -> tuple[int, int, int, int, int, datetime, str]:
     """Sort strongest buyer/strategic events ahead of generic networking."""
     category_priority = 0
     if has_executive_audience(event):
@@ -544,8 +652,10 @@ def ranking_key(event: Event) -> tuple[int, int, int, int, datetime, str]:
         title_bonus += 2
     if is_recurring_generic_networking(event):
         title_bonus -= 3
+    confidence_priority = {"high": 2, "medium": 1, "low": 0}.get(event.confidence, 2)
     return (
         -category_priority,
+        -confidence_priority,
         -event.score,
         -title_bonus,
         event.recurring_count if is_generic_networking(event) else 0,
@@ -642,6 +752,8 @@ def write_event_sections(lines: list[str], events: list[Event], fallback: bool =
                 f"- **Event name:** {event.title}",
                 f"- **Date and time:** {format_date(event)}",
                 f"- **Location:** {event.location or 'Location not listed'}",
+                f"- **Source:** {event.source}",
+                f"- **Confidence:** {event.confidence}",
                 f"- **Relevance score:** {event.score}/10",
                 f"- **Why it matters:** {why_this_matters(event)}",
                 f"- **Suggested action:** {suggested_action(event)}",
@@ -663,6 +775,7 @@ def write_event_sections(lines: list[str], events: list[Event], fallback: bool =
             f"- **Date and time:** {format_date(event)}",
             f"- **Location:** {event.location or 'Location not listed'}",
             f"- **Source:** {event.source}",
+            f"- **Confidence:** {event.confidence}",
             f"- **URL:** {event.url}",
             f"- **Relevance score:** {event.score}/10",
             f"- **Why this matters for a cloud consulting company:** {why_this_matters(event)}",
@@ -726,6 +839,9 @@ def write_digest(events: list[Event], errors: list[str], diagnostics: RunDiagnos
         "",
         f"- **Sources fetched successfully:** {', '.join(diagnostics.sources_fetched_successfully) if diagnostics.sources_fetched_successfully else 'None'}",
         f"- **Sources skipped:** {', '.join(diagnostics.sources_skipped) if diagnostics.sources_skipped else 'None'}",
+        f"- **Eventbrite direct scraping:** {diagnostics.eventbrite_direct_scraping}",
+        f"- **Eventbrite search discovery:** {diagnostics.eventbrite_search_discovery}",
+        f"- **Number of Eventbrite candidates found:** {diagnostics.eventbrite_candidates_found}",
         f"- **Number of raw events found:** {diagnostics.raw_events_found}",
         f"- **Number of events after filtering:** {diagnostics.events_after_filtering}",
         f"- **Number of events after deduplication:** {diagnostics.events_after_deduplication}",
@@ -752,6 +868,27 @@ def main() -> None:
     events_by_id: dict[str, Event] = {}
 
     for source in sources:
+        if source.get("type") == "search_discovery":
+            if not os.environ.get("SEARCH_API_KEY", "").strip():
+                diagnostics.eventbrite_search_discovery = "disabled"
+                diagnostics.sources_skipped.append(f"{source_name(source)} (missing SEARCH_API_KEY)")
+                continue
+            diagnostics.eventbrite_search_discovery = "enabled"
+            try:
+                fetched_events = fetch_search_discovery_source(source)
+                diagnostics.sources_fetched_successfully.append(source_name(source))
+                diagnostics.raw_events_found += len(fetched_events)
+                diagnostics.eventbrite_candidates_found += len(fetched_events)
+                for event in fetched_events:
+                    event.score = score_event(event)
+                    if event.event_id not in seen_event_ids and keep_event(event):
+                        events_by_id[event.event_id] = event
+            except requests.RequestException as exc:
+                diagnostics.sources_skipped.append(source_name(source))
+                errors.append(source_note(source, exc))
+            continue
+        if "eventbrite.com" in str(source.get("url", "")).lower():
+            diagnostics.eventbrite_direct_scraping = "enabled" if source.get("enabled", True) is not False else "disabled"
         if source.get("enabled", True) is False:
             diagnostics.sources_skipped.append(f"{source_name(source)} (disabled)")
             continue

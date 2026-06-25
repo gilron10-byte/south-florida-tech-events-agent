@@ -1,6 +1,6 @@
 # South Florida Tech Events Weekly Digest
 
-Generated: 2026-06-25 20:17 UTC
+Generated: 2026-06-25 20:26 UTC
 
 Executive focus: business-development opportunities for a cloud consulting company across Miami, Fort Lauderdale, Boca Raton, and West Palm Beach.
 
@@ -29,7 +29,10 @@ Edit `sources.yaml` to add or remove public event pages.
 ## Run diagnostics
 
 - **Sources fetched successfully:** None
-- **Sources skipped:** Refresh Miami Events, Tech Hub South Florida Events, Eventbrite Miami Tech Events (disabled), Eventbrite Fort Lauderdale Tech Events (disabled), Eventbrite West Palm Beach Tech Events (disabled)
+- **Sources skipped:** Refresh Miami Events, Tech Hub South Florida Events, Eventbrite Miami Tech Events (disabled), Eventbrite Fort Lauderdale Tech Events (disabled), Eventbrite West Palm Beach Tech Events (disabled), Eventbrite Search Discovery (missing SEARCH_API_KEY)
+- **Eventbrite direct scraping:** disabled
+- **Eventbrite search discovery:** disabled
+- **Number of Eventbrite candidates found:** 0
 - **Number of raw events found:** 0
 - **Number of events after filtering:** 0
 - **Number of events after deduplication:** 0

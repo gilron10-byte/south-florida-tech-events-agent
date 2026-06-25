@@ -115,6 +115,19 @@ sources:
     max_events: 20
 ```
 
+Eventbrite city/category pages are intentionally disabled by default because they often reject automated requests. To supplement the primary sources without scraping Eventbrite search pages directly, configure a `type: search_discovery` source and set `SEARCH_API_KEY` in the environment. The default JSON search endpoint is SerpAPI-compatible, and `SEARCH_API_URL` can point to a compatible provider. If `SEARCH_API_KEY` is missing, Eventbrite search discovery is skipped gracefully.
+
+Search-discovered Eventbrite listings are kept only when their URL contains `eventbrite.com/e/`. If the individual Eventbrite event page can be fetched normally, the script enriches the candidate; if not, it still includes the search title/snippet as a low-confidence candidate.
+
+```yaml
+sources:
+  - name: Eventbrite Search Discovery
+    type: search_discovery
+    max_events: 25
+    queries:
+      - 'site:eventbrite.com/e/ Miami AI startup cloud'
+```
+
 ## Running with GitHub Actions
 
 A GitHub Actions workflow is included at `.github/workflows/weekly-digest.yml`.
