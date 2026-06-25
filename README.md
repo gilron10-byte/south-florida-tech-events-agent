@@ -9,6 +9,8 @@ The digest is aimed at a cloud services company looking for business-development
 - Reads public event pages from `sources.yaml`.
 - Looks for events around Miami, Miami Beach, Fort Lauderdale, Boca Raton, and West Palm Beach.
 - Prioritizes topics such as AI, cloud, AWS, Azure, startups, cybersecurity, SaaS, DevOps, data, product, and engineering.
+- Uses a simple 1-10 relevance score and places the best opportunities in a Top 3 Recommendations section.
+- Adds event-specific business-development rationale, suggested actions, and short recommended next steps.
 - Writes the result to `output/weekly_digest.md`.
 - Keeps a placeholder tracking file at `data/seen_events.json` for future deduping/history improvements.
 - Does **not** use email, Slack, paid APIs, or secrets.
@@ -49,6 +51,29 @@ output/weekly_digest.md
 
 You can copy the Markdown into a document, email draft, CRM note, or internal planning tool.
 
+## How relevance scoring works
+
+Each event receives a simple **1-10 relevance score** for a cloud consulting company focused on AWS, Azure, AI, DevOps, cybersecurity, SaaS, startups, and enterprise technology.
+
+The score is intentionally directional rather than scientific:
+
+- **8-10:** High-priority business-development opportunity. These events usually combine strong topics such as AWS, Azure, cloud, AI/agentic workflows, cybersecurity, DevOps, data, SaaS, enterprise technology, or product/engineering leadership with signs of senior decision makers, founders, investors, customers, partners, or conference/summit-style networking.
+- **5-7:** Worth a targeted follow-up. These events may be good places to send an account executive or technical person, especially when they are in Miami, Fort Lauderdale, Boca Raton, West Palm Beach, or another South Florida market.
+- **1-4:** Low priority. These are often generic social events, consumer-oriented events, student-only events, events with unclear technology/business audiences, or listings with missing location/detail.
+
+The script increases scores for:
+
+- CTO, CPO, CIO, CISO, founder, investor, VC, executive, VP, director, startup, SaaS, enterprise, product, engineering, AI, agentic, cloud, AWS, Azure, cybersecurity, DevOps, and data signals.
+- Events likely to include senior decision makers or buyer-adjacent audiences.
+- Events in Miami, Fort Lauderdale, Boca Raton, West Palm Beach, and nearby South Florida locations.
+- Events useful for partnerships, customer networking, AWS/Azure ecosystem relationships, or local founder relationships.
+
+The script lowers scores for:
+
+- Generic social events, parties, consumer events, concerts, festivals, student-only events, and career fairs.
+- Events with no clear technology/business audience.
+- Events with missing locations unless the title and audience are highly relevant.
+
 ## Changing event sources
 
 Open `sources.yaml` and add or remove public event pages.
@@ -87,7 +112,7 @@ To run it manually:
 4. Click **Run workflow**.
 5. Download the generated `weekly-digest` artifact from the workflow run.
 
-The workflow also includes a commented weekly schedule. Uncomment it later when you are ready for automatic weekly runs.
+The workflow runs manually and on a weekly Monday schedule. Each run uploads `output/weekly_digest.md` as the `weekly-digest` artifact.
 
 ## Notes and limitations
 
