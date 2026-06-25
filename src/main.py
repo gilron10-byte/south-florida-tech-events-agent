@@ -5,6 +5,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -17,6 +18,7 @@ from dateutil import parser as date_parser
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES_FILE = ROOT / "sources.yaml"
 OUTPUT_FILE = ROOT / "output" / "weekly_digest.md"
+EASTERN_TZ = ZoneInfo("America/New_York")
 SEEN_EVENTS_FILE = ROOT / "data" / "seen_events.json"
 
 TARGET_CITIES = {
@@ -34,6 +36,8 @@ STRATEGIC_TERMS = {
     "azure": 8,
     "cloud": 7,
     "cloud computing": 7,
+    "agentic": 7,
+    "agent": 4,
     "ai": 6,
     "artificial intelligence": 6,
     "cybersecurity": 6,
@@ -201,31 +205,46 @@ def matching_terms(haystack: str, weighted_terms: dict[str, int]) -> list[tuple[
 
 
 def score_event(event: Event) -> int:
+    """Return a simple 1-10 business-development relevance score."""
     haystack = " ".join([event.title, event.location, event.summary]).lower()
-    score = 10
-    score += sum(weight for _, weight in matching_terms(haystack, STRATEGIC_TERMS))
-    score += sum(weight for _, weight in matching_terms(haystack, TARGET_CITIES))
-    score += sum(weight for _, weight in matching_terms(haystack, AUDIENCE_TERMS))
-    score += sum(weight for _, weight in matching_terms(haystack, BUSINESS_VALUE_TERMS))
-    score += sum(weight for _, weight in matching_terms(haystack, LOW_VALUE_TERMS))
+    raw_score = 18
+    raw_score += sum(weight for _, weight in matching_terms(haystack, STRATEGIC_TERMS))
+    raw_score += sum(weight for _, weight in matching_terms(haystack, TARGET_CITIES))
+    raw_score += sum(weight for _, weight in matching_terms(haystack, AUDIENCE_TERMS))
+    raw_score += sum(weight for _, weight in matching_terms(haystack, BUSINESS_VALUE_TERMS))
+    raw_score += sum(weight for _, weight in matching_terms(haystack, LOW_VALUE_TERMS))
+
+    senior_terms = ["cto", "cpo", "cio", "ciso", "vp", "director", "founder", "executive", "leadership", "investor"]
+    cloud_relationship_terms = ["aws", "amazon web services", "azure", "partner", "partnership", "enterprise", "customer", "client"]
+    hot_delivery_terms = ["ai", "artificial intelligence", "agentic", "agent", "cloud", "cybersecurity", "cyber security", "devops", "data", "engineering", "product", "saas"]
+
+    if any(term in haystack for term in senior_terms):
+        raw_score += 8
+    if any(term in haystack for term in cloud_relationship_terms):
+        raw_score += 7
+    if any(term in haystack for term in hot_delivery_terms):
+        raw_score += 6
+    if not event.location.strip():
+        raw_score -= 8
     if not event.summary or len(event.summary) < 80:
-        score -= 3
+        raw_score -= 4
     if not any(term in haystack for term in BUSINESS_VALUE_TERMS):
-        score -= 2
+        raw_score -= 3
     if event.parsed_date:
         now = datetime.now(timezone.utc)
-        if now <= event.parsed_date <= now + timedelta(days=14):
-            score += 5
+        if now <= event.parsed_date <= now + timedelta(days=21):
+            raw_score += 4
         elif event.parsed_date < now - timedelta(days=1):
-            score -= 6
-    return max(0, min(score, 100))
+            raw_score -= 8
+
+    return max(1, min(10, round(raw_score / 10)))
 
 
 def keep_event(event: Event) -> bool:
     haystack = " ".join([event.title, event.location, event.summary]).lower()
     has_strategic_term = any(term in haystack for term in STRATEGIC_TERMS)
     has_target_city = any(city in haystack for city in TARGET_CITIES)
-    return event.score >= 12 and has_strategic_term and (has_target_city or event.score >= 22)
+    return event.score >= 3 and has_strategic_term and (has_target_city or event.score >= 6)
 
 
 def load_seen_event_ids() -> set[str]:
@@ -242,34 +261,55 @@ def load_seen_event_ids() -> set[str]:
 
 def format_date(event: Event) -> str:
     if event.parsed_date:
-        return event.parsed_date.strftime("%Y-%m-%d %H:%M %Z").strip()
+        return event.parsed_date.astimezone(EASTERN_TZ).strftime("%Y-%m-%d %I:%M %p %Z").strip()
     return event.date_text or "Date/time not listed"
 
 
 def why_this_matters(event: Event) -> str:
     haystack = " ".join([event.title, event.location, event.summary]).lower()
-    strategic = [term for term, _ in matching_terms(haystack, STRATEGIC_TERMS)[:3]]
-    audience = [term for term, _ in matching_terms(haystack, AUDIENCE_TERMS)[:2]]
+    strategic = [term for term, _ in matching_terms(haystack, STRATEGIC_TERMS)[:4]]
+    audience = [term for term, _ in matching_terms(haystack, AUDIENCE_TERMS)[:3]]
+    value_terms = [term for term, _ in matching_terms(haystack, BUSINESS_VALUE_TERMS)[:3]]
     city = next((city.title() for city in TARGET_CITIES if city in haystack), event.location or "South Florida")
-    if any(term in haystack for term in ["aws", "amazon web services", "azure", "cloud"]):
-        return f"Strong cloud-alignment in {city}; useful for finding modernization prospects and strengthening AWS/Azure ecosystem relationships."
-    if any(term in haystack for term in ["founder", "startup", "startups", "vc", "venture capital"]):
-        return f"Founder and startup audience in {city}; good for partnership conversations, portfolio referrals, and early cloud architecture needs."
-    if any(term in haystack for term in ["cybersecurity", "cyber security", "devops", "data", "ai", "artificial intelligence"]):
-        topic = ", ".join(strategic) or "technical"
-        return f"Focused on {topic} in {city}; relevant for consultative conversations around secure, scalable cloud implementation."
+    title_context = event.title.strip()
+
+    reasons: list[str] = []
+    if strategic:
+        reasons.append(f"matches priority services ({', '.join(strategic)})")
     if audience:
-        return f"Likely senior audience ({', '.join(audience)}) in {city}; worth evaluating for enterprise relationship-building."
-    return f"Potential local tech networking in {city}; review details before investing business-development time."
+        reasons.append(f"signals a senior or buyer-adjacent audience ({', '.join(audience)})")
+    if value_terms:
+        reasons.append(f"has BD value cues ({', '.join(value_terms)})")
+    if any(city.lower() in haystack for city in TARGET_CITIES):
+        reasons.append(f"is in the target South Florida market ({city})")
+
+    if any(term in haystack for term in ["aws", "amazon web services", "azure", "cloud"]):
+        angle = "AWS/Azure modernization, migration, and managed-cloud conversations"
+    elif any(term in haystack for term in ["agentic", "ai", "artificial intelligence"]):
+        angle = "AI delivery, agentic workflow, data readiness, and governance offers"
+    elif any(term in haystack for term in ["cybersecurity", "cyber security", "devops"]):
+        angle = "secure DevOps, cloud security, and compliance-led consulting conversations"
+    elif any(term in haystack for term in ["founder", "startup", "startups", "vc", "venture capital", "saas"]):
+        angle = "founder, SaaS, and investor relationships that can create cloud architecture or fractional engineering demand"
+    elif any(term in haystack for term in ["enterprise", "cto", "cio", "cpo", "product", "engineering"]):
+        angle = "enterprise technology leadership networking and account-development discovery"
+    else:
+        angle = "local relationship-building, but the buyer fit should be validated before committing senior time"
+
+    if reasons:
+        return f"{title_context} {', '.join(reasons)}. Best angle: {angle}."
+    return f"{title_context} has limited listing detail. Use it only if the attendee list confirms cloud, AI, SaaS, cybersecurity, startup, or enterprise technology buyers."
 
 
 def suggested_action(event: Event) -> str:
     haystack = " ".join([event.title, event.location, event.summary]).lower()
-    if event.score >= 45 and any(term in haystack for term in ["conference", "summit", "aws", "azure", "enterprise", "cto", "cio"]):
-        return "Sponsor"
-    if event.score >= 32:
-        return "Attend"
-    if event.score >= 20:
+    if event.score >= 8 and any(term in haystack for term in ["conference", "summit", "aws", "azure", "enterprise"]):
+        return "Explore sponsorship"
+    if event.score >= 8 and any(term in haystack for term in ["cto", "cpo", "cio", "founder", "executive", "leadership", "enterprise"]):
+        return "Attend personally"
+    if event.score >= 7 and any(term in haystack for term in ["ai", "agentic", "cloud", "aws", "azure", "devops", "cybersecurity", "data", "engineering"]):
+        return "Send technical person"
+    if event.score >= 5:
         return "Send AE"
     return "Ignore"
 
@@ -290,11 +330,22 @@ def write_digest(events: list[Event], errors: list[str]) -> None:
         lines.extend(["## Top 3 Recommendations", ""])
         for index, event in enumerate(events[:3], start=1):
             lines.extend([
-                f"{index}. **{event.title}** — {suggested_action(event)}; score {event.score}.",
-                f"   - {why_this_matters(event)}",
-                f"   - {event.url}",
+                f"### {index}. {event.title}",
+                f"- **Event name:** {event.title}",
+                f"- **Date and time:** {format_date(event)}",
+                f"- **Location:** {event.location or 'Location not listed'}",
+                f"- **Relevance score:** {event.score}/10",
+                f"- **Why it matters:** {why_this_matters(event)}",
+                f"- **Suggested action:** {suggested_action(event)}",
+                f"- **URL:** {event.url}",
+                "",
             ])
+
+        lines.extend(["## Recommended next steps", ""])
+        for event in events[:3]:
+            lines.append(f"- {suggested_action(event)} for {event.title}.")
         lines.append("")
+
         lines.extend(["## Prioritized Events", ""])
         for index, event in enumerate(events, start=1):
             lines.extend([
@@ -304,7 +355,7 @@ def write_digest(events: list[Event], errors: list[str]) -> None:
                 f"- **Location:** {event.location or 'Location not listed'}",
                 f"- **Source:** {event.source}",
                 f"- **URL:** {event.url}",
-                f"- **Relevance score:** {event.score}/100",
+                f"- **Relevance score:** {event.score}/10",
                 f"- **Why this matters for a cloud consulting company:** {why_this_matters(event)}",
                 f"- **Suggested action:** {suggested_action(event)}",
                 "",
@@ -315,18 +366,21 @@ def write_digest(events: list[Event], errors: list[str]) -> None:
             "",
             "No qualifying business-development events were found in this run.",
             "",
+            "## Recommended next steps",
+            "",
+            "- Add more source pages or rerun later before scheduling outreach.",
+            "",
             "## Prioritized Events",
             "",
             "No matching events were found from the configured public sources. Try adding more sources to `sources.yaml` or rerun later.",
             "",
         ])
 
+    lines.extend(["## Sources", "", "Edit `sources.yaml` to add or remove public event pages."])
     if errors:
-        lines.extend(["## Source notes", ""])
+        lines.extend(["", "## Source notes", ""])
         lines.extend(f"- {error}" for error in errors)
         lines.append("")
-
-    lines.extend(["## Sources", "", "Edit `sources.yaml` to add or remove public event pages."])
     OUTPUT_FILE.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -334,7 +388,7 @@ def source_note(source: dict[str, Any], exc: requests.RequestException) -> str:
     name = source.get("name", source.get("url", "Unknown source"))
     status = getattr(exc.response, "status_code", None)
     if status:
-        return f"{name} was skipped because the site returned HTTP {status}."
+        return f"{name} was skipped because the public event page was unavailable to the scraper this run."
     return f"{name} was skipped because it could not be reached this run."
 
 
