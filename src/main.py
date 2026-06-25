@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 import yaml
@@ -140,6 +140,10 @@ class RunDiagnostics:
     eventbrite_direct_scraping: str = "disabled"
     eventbrite_search_discovery: str = "disabled"
     eventbrite_candidates_found: int = 0
+    search_api_endpoint_host: str = "not used"
+    search_queries_attempted: int = 0
+    search_api_responses_received: int = 0
+    eventbrite_urls_found_before_filtering: int = 0
 
 
 def load_sources() -> list[dict[str, Any]]:
@@ -227,7 +231,43 @@ def is_eventbrite_event_url(url: str) -> bool:
     return "eventbrite.com/e/" in url.lower()
 
 
-def search_api_results(query: str, max_results: int) -> list[dict[str, str]]:
+DEFAULT_SEARCH_API_URL = "https://serpapi.com/search.json"
+SECRET_QUERY_PARAMS = {"api_key", "apikey", "key", "token", "access_token", "secret", "password"}
+
+
+def safe_short_message(value: Any, max_length: int = 180) -> str:
+    """Return a one-line diagnostic message without excessive detail."""
+    message = re.sub(r"\s+", " ", str(value or "")).strip()
+    return message[:max_length].rstrip()
+
+
+def configured_search_api_url() -> str:
+    raw_endpoint = os.environ.get("SEARCH_API_URL", "").strip()
+    if not raw_endpoint:
+        return DEFAULT_SEARCH_API_URL
+    parsed = urlparse(raw_endpoint)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return DEFAULT_SEARCH_API_URL
+    return raw_endpoint
+
+
+def redact_url_query(url: str) -> str:
+    parsed = urlparse(url)
+    redacted_params = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        redacted_params.append((key, "[REDACTED]" if key.lower() in SECRET_QUERY_PARAMS else value))
+    return urlunparse(parsed._replace(query=urlencode(redacted_params)))
+
+
+class SearchDiscoveryError(requests.RequestException):
+    """Raised when the search API fails with a user-safe note."""
+
+    def __init__(self, message: str, response: requests.Response | None = None) -> None:
+        super().__init__(message, response=response)
+        self.safe_message = safe_short_message(message)
+
+
+def search_api_results(query: str, max_results: int, diagnostics: RunDiagnostics | None = None) -> list[dict[str, str]]:
     """Return normalized web-search results from a JSON search API.
 
     The default endpoint is SerpAPI's Google Search API because it accepts a
@@ -237,11 +277,32 @@ def search_api_results(query: str, max_results: int) -> list[dict[str, str]]:
     api_key = os.environ.get("SEARCH_API_KEY", "").strip()
     if not api_key:
         return []
-    endpoint = os.environ.get("SEARCH_API_URL", "https://serpapi.com/search.json")
+    endpoint = configured_search_api_url()
+    parsed_endpoint = urlparse(endpoint)
+    if diagnostics is not None:
+        diagnostics.search_api_endpoint_host = parsed_endpoint.netloc or "unknown"
+        diagnostics.search_queries_attempted += 1
     params = {"q": query, "api_key": api_key, "num": max_results}
-    response = requests.get(endpoint, params=params, headers={"User-Agent": USER_AGENT}, timeout=20)
-    response.raise_for_status()
-    payload = response.json()
+    prepared = requests.Request("GET", endpoint, params=params).prepare()
+    print(f"Using search endpoint: {redact_url_query(prepared.url or endpoint)}")
+    try:
+        response = requests.get(endpoint, params=params, headers={"User-Agent": USER_AGENT}, timeout=20)
+    except requests.RequestException as exc:
+        raise SearchDiscoveryError(safe_short_message(exc)) from exc
+    if diagnostics is not None:
+        diagnostics.search_api_responses_received += 1
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    error_message = ""
+    if isinstance(payload, dict):
+        error_message = safe_short_message(payload.get("error") or payload.get("error_message") or payload.get("message") or "")
+    if response.status_code >= 400:
+        detail = error_message or "search API returned an error response"
+        raise SearchDiscoveryError(detail, response=response)
+    if error_message:
+        raise SearchDiscoveryError(error_message, response=response)
     containers = [
         payload.get("organic_results"),
         payload.get("results"),
@@ -288,7 +349,7 @@ def fetch_eventbrite_event_page(candidate: Event) -> Event:
     return Event(title[:180].strip(), candidate.url, "Eventbrite via Search", date_text, location, summary[:700], parse_date(date_text), confidence=confidence)
 
 
-def fetch_search_discovery_source(source: dict[str, Any]) -> list[Event]:
+def fetch_search_discovery_source(source: dict[str, Any], diagnostics: RunDiagnostics | None = None) -> list[Event]:
     if not os.environ.get("SEARCH_API_KEY", "").strip():
         return []
     queries = source.get("queries") or []
@@ -296,8 +357,11 @@ def fetch_search_discovery_source(source: dict[str, Any]) -> list[Event]:
     per_query = max(1, int(source.get("results_per_query", 10)))
     events_by_url: dict[str, Event] = {}
     for query in queries:
-        for result in search_api_results(str(query), per_query):
+        results = search_api_results(str(query), per_query, diagnostics) if diagnostics is not None else search_api_results(str(query), per_query)
+        for result in results:
             url = result["url"]
+            if "eventbrite.com" in url.lower() and diagnostics is not None:
+                diagnostics.eventbrite_urls_found_before_filtering += 1
             if not is_eventbrite_event_url(url):
                 continue
             candidate = Event(
@@ -312,6 +376,8 @@ def fetch_search_discovery_source(source: dict[str, Any]) -> list[Event]:
             except requests.RequestException:
                 pass
             events_by_url.setdefault(url, candidate)
+            if diagnostics is not None:
+                diagnostics.eventbrite_candidates_found = len(events_by_url)
             if len(events_by_url) >= max_events:
                 return list(events_by_url.values())
     return list(events_by_url.values())
@@ -841,6 +907,10 @@ def write_digest(events: list[Event], errors: list[str], diagnostics: RunDiagnos
         f"- **Sources skipped:** {', '.join(diagnostics.sources_skipped) if diagnostics.sources_skipped else 'None'}",
         f"- **Eventbrite direct scraping:** {diagnostics.eventbrite_direct_scraping}",
         f"- **Eventbrite search discovery:** {diagnostics.eventbrite_search_discovery}",
+        f"- **Search API endpoint host:** {diagnostics.search_api_endpoint_host}",
+        f"- **Number of search queries attempted:** {diagnostics.search_queries_attempted}",
+        f"- **Number of search API responses received:** {diagnostics.search_api_responses_received}",
+        f"- **Number of Eventbrite URLs found before filtering:** {diagnostics.eventbrite_urls_found_before_filtering}",
         f"- **Number of Eventbrite candidates found:** {diagnostics.eventbrite_candidates_found}",
         f"- **Number of raw events found:** {diagnostics.raw_events_found}",
         f"- **Number of events after filtering:** {diagnostics.events_after_filtering}",
@@ -855,8 +925,13 @@ def write_digest(events: list[Event], errors: list[str], diagnostics: RunDiagnos
 def source_note(source: dict[str, Any], exc: requests.RequestException) -> str:
     name = source_name(source)
     status = getattr(exc.response, "status_code", None)
+    if source.get("type") == "search_discovery":
+        detail = getattr(exc, "safe_message", "") or safe_short_message(exc)
+        if status:
+            return f"{name} search discovery failed with HTTP {status}: {detail}"
+        return f"{name} search discovery failed: {detail or 'search API could not be reached this run'}"
     if status:
-        return f"{name} was skipped because the public event page was unavailable to the scraper this run."
+        return f"{name} was skipped because the public event page was unavailable to the scraper this run (HTTP {status})."
     return f"{name} was skipped because it could not be reached this run."
 
 
@@ -874,11 +949,12 @@ def main() -> None:
                 diagnostics.sources_skipped.append(f"{source_name(source)} (missing SEARCH_API_KEY)")
                 continue
             diagnostics.eventbrite_search_discovery = "enabled"
+            diagnostics.search_api_endpoint_host = urlparse(configured_search_api_url()).netloc or "unknown"
             try:
-                fetched_events = fetch_search_discovery_source(source)
+                fetched_events = fetch_search_discovery_source(source, diagnostics)
                 diagnostics.sources_fetched_successfully.append(source_name(source))
                 diagnostics.raw_events_found += len(fetched_events)
-                diagnostics.eventbrite_candidates_found += len(fetched_events)
+                diagnostics.eventbrite_candidates_found = max(diagnostics.eventbrite_candidates_found, len(fetched_events))
                 for event in fetched_events:
                     event.score = score_event(event)
                     if event.event_id not in seen_event_ids and keep_event(event):
