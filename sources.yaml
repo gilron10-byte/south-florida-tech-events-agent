@@ -5,21 +5,30 @@
 # - event_selector: CSS selector for event cards/rows (optional)
 # - title_selector, date_selector, location_selector, link_selector: CSS selectors inside each card (optional)
 # - max_events: Limit events read from this source (optional)
+# - enabled: false disables a fragile/optional source without deleting it
 sources:
+  # Primary source: Refresh Miami is the most relevant public event calendar.
   - name: Refresh Miami Events
     url: https://refreshmiami.com/events/
     event_selector: article
     max_events: 20
+  # Secondary source: Tech Hub can supplement Refresh Miami when its listings are available.
   - name: Tech Hub South Florida Events
     url: https://techhubsouthflorida.org/events/
     event_selector: article
     max_events: 20
+  # Optional source: Eventbrite frequently returns HTTP 405 to automated public-page
+  # requests, so these pages are disabled by default and should not be relied on for
+  # digest completeness. Re-enable temporarily only if the pages are fetchable.
   - name: Eventbrite Miami Tech Events
     url: https://www.eventbrite.com/d/fl--miami/technology--events/
     max_events: 15
+    enabled: false
   - name: Eventbrite Fort Lauderdale Tech Events
     url: https://www.eventbrite.com/d/fl--fort-lauderdale/technology--events/
     max_events: 15
+    enabled: false
   - name: Eventbrite West Palm Beach Tech Events
     url: https://www.eventbrite.com/d/fl--west-palm-beach/technology--events/
     max_events: 15
+    enabled: false
