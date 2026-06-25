@@ -161,7 +161,9 @@ Refresh Miami and Tech Hub South Florida are high-confidence for South Florida b
 
 Search-discovered results must be verified before they can be trusted. A search snippet may have a relevant title but no confirmed event date or location. Those items go into **Candidates to review** unless the agent can identify a clear title, URL, date or event-like snippet, market relevance, and relevance score of at least 6.
 
-Low-confidence results do not enter the Top 3 unless they are promoted with clear date, location, strong relevance, and market match.
+Strong search-discovered items that clearly match the market and score at least 6, but are blocked from the strict sections only because the location needs verification, are shown in **High-priority candidates to verify**. This section is intended for manual review of event pages such as Eventbrite, Luma, or other event-specific pages where the title, URL, or snippet strongly indicates the target city/market. It excludes wrong-market results, generic directory/resource pages, social posts, low-confidence items, and weakly relevant results.
+
+Low-confidence results do not enter the Top 3. Top 3 and Prioritized Events require clear market match, real date, real location, high or medium confidence, and strong relevance.
 
 ## 11. How to run locally
 
@@ -194,7 +196,8 @@ Open the completed workflow run and download the artifact.
 
 - **Top 3 Recommendations**: Best market-specific events for action. Each market has its own Top 3.
 - **Recommended next steps**: Suggested coverage plan such as attend personally, send senior AE, send technical person, send AE, track only, or review manually.
-- **Prioritized Events**: Higher-confidence events that passed filtering and scoring.
+- **Prioritized Events**: Higher-confidence events that passed filtering and scoring with a real date, real location, market match, high/medium confidence, and relevance score of at least 6.
+- **High-priority candidates to verify**: Strong market-relevant event candidates that are not verified enough for Top 3 or Prioritized Events because location still needs manual verification.
 - **Candidates to review**: Lower-confidence search results grouped by source/category. Review manually before using.
 - **Confidence**:
   - `high`: direct source or verified date/location.
