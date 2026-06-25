@@ -1,6 +1,6 @@
 # Tel Aviv Tech Events Weekly Digest
 
-Generated: 2026-06-25 22:47 UTC
+Generated: 2026-06-25 23:06 UTC
 
 Executive focus: business-development opportunities for a cloud consulting company across Tel Aviv, Herzliya, Ramat Gan, Givatayim, Ra'anana, Petah Tikva, Israel.
 
@@ -48,6 +48,11 @@ Edit `markets.yaml` to add or remove market-specific public event pages and sear
 - **Number of raw events found:** 0
 - **Number of events after filtering:** 0
 - **Number of events after deduplication:** 0
+- **Candidates blocked due to missing/invalid location:** 0
+- **Candidates blocked due to wrong market:** 0
+- **Candidates blocked due to low confidence:** 0
+- **Candidates blocked because they were generic directory/resource pages:** 0
+- **Candidates promoted to main digest:** 0
 - **Eventbrite direct scraping:** disabled
 - **Eventbrite search discovery:** disabled
 - **Fallback cache was used:** No

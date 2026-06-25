@@ -108,9 +108,9 @@ def test_why_this_matters_uses_natural_executive_language() -> None:
 
 def test_fallback_cache_works_when_all_sources_fail(tmp_path, monkeypatch) -> None:
     cache_file = tmp_path / "last_successful_events.json"
-    output_file = tmp_path / "weekly_digest.md"
+    output_file = tmp_path / "output" / "south_florida_weekly_digest.md"
+    monkeypatch.setattr(main, "ROOT", tmp_path)
     monkeypatch.setattr(main, "LAST_SUCCESSFUL_EVENTS_FILE", cache_file)
-    monkeypatch.setattr(main, "OUTPUT_FILE", output_file)
 
     cached_event = make_event("Cached Miami Cloud Leadership Summit")
     main.save_last_successful_events([cached_event])
@@ -178,7 +178,7 @@ def test_eventbrite_search_candidates_survive_failed_page_fetch(monkeypatch) -> 
     assert events[0].confidence == "low"
     assert "eventbrite.com/e/" in events[0].url
     events[0].score = main.score_event(events[0])
-    assert main.keep_event(events[0])
+    assert not main.promote_search_event(events[0], {"id": "south_florida", "name": "South Florida", "cities": ["Miami"]})
 
 
 def test_search_discovery_reports_safe_serpapi_errors(monkeypatch) -> None:
@@ -324,11 +324,63 @@ def test_search_discovered_candidate_can_go_to_review() -> None:
     )
     event.score = main.score_event(event, market)
     event.missing_fields = main.missing_fields(event)
-    assert main.is_event_page(event)
-    assert not main.promote_search_event(event, market) or event.confidence == "low"
+    assert not main.promote_search_event(event, market)
     assert main.candidate_bucket(event) in {"AWS", "Cloud / Hyperscaler"}
 
 
 def test_workflow_uploads_all_markdown_outputs() -> None:
     workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "weekly-digest.yml").read_text()
     assert "path: output/*.md" in workflow
+
+
+def test_autocomplete_location_is_treated_as_missing() -> None:
+    event = main.Event(
+        title="Miami AI Founder Summit",
+        url="https://example.com/events/miami-ai-founder-summit",
+        source="Search",
+        date_text="July 10, 2026",
+        location="autocomplete",
+        summary="Miami founders discuss AI cloud platforms.",
+        parsed_date=main.parse_date("July 10, 2026"),
+        confidence="medium",
+    )
+    main.normalize_event_location(event)
+    event.score = main.score_event(event, {"cities": ["Miami"]})
+    assert event.location == ""
+    assert "location" in main.missing_fields(event)
+    assert not main.promote_search_event(event, {"id": "south_florida", "name": "South Florida", "cities": ["Miami"]})
+
+
+def test_wrong_market_search_result_cannot_be_promoted() -> None:
+    market = {"id": "tel_aviv", "name": "Tel Aviv", "cities": ["Tel Aviv", "Israel"]}
+    event = main.Event(
+        title="San Francisco AI Cloud Summit",
+        url="https://example.com/events/san-francisco-ai-cloud-summit",
+        source="Search",
+        date_text="July 10, 2026",
+        location="San Francisco",
+        summary="AI cloud startup summit.",
+        parsed_date=main.parse_date("July 10, 2026"),
+        confidence="medium",
+    )
+    event.score = 10
+    assert main.has_wrong_market(event, market)
+    assert not main.promote_search_event(event, market)
+    assert "wrong or unclear market" in main.candidate_block_reasons(event, market)
+
+
+def test_generic_directory_page_goes_to_candidates_not_main() -> None:
+    market = {"id": "south_florida", "name": "South Florida", "cities": ["Miami"]}
+    event = main.Event(
+        title="AWS Summit Agenda Miami",
+        url="https://aws.amazon.com/events/summits/miami/agenda/",
+        source="Cloud Provider Events",
+        date_text="July 10, 2026",
+        location="Miami",
+        summary="Agenda page and cloud resources for AWS Summit Miami.",
+        parsed_date=main.parse_date("July 10, 2026"),
+        confidence="medium",
+    )
+    event.score = 10
+    assert main.is_generic_directory_or_resource_page(event)
+    assert not main.promote_search_event(event, market)
