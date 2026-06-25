@@ -1,21 +1,13 @@
 # New York Tech Events Weekly Digest
 
-Generated: 2026-06-25 23:06 UTC
+Generated: 2026-06-25 23:17 UTC
 
 Executive focus: business-development opportunities for a cloud consulting company across New York, Manhattan, Brooklyn, Queens, Jersey City.
 
-## Top 3 Recommendations
+## Run status
 
 No qualifying business-development events were found in this run.
 Reason: One or more sources failed or were skipped, and no fallback cache was available.
-
-## Recommended next steps
-
-- Review Candidates to review or add more source pages/discovery queries.
-
-## Prioritized Events
-
-No matching events were found from configured public sources.
 
 ## Top 3 Recommendations
 
@@ -23,9 +15,13 @@ No qualifying Top 3 recommendations were found for this market.
 
 ## Recommended next steps
 
-- Review Candidates to review for manually verifiable events.
+- Review High-priority candidates to verify for strong manually verifiable events.
 
 ## Prioritized Events
+
+## High-priority candidates to verify
+
+No high-priority candidates require manual location verification.
 
 ## Candidates to review
 
@@ -53,6 +49,9 @@ Edit `markets.yaml` to add or remove market-specific public event pages and sear
 - **Candidates blocked due to low confidence:** 0
 - **Candidates blocked because they were generic directory/resource pages:** 0
 - **Candidates promoted to main digest:** 0
+- **High-priority candidates to verify count:** 0
+- **Candidates blocked only because of missing location:** 0
+- **Candidates promoted to high-priority verification:** 0
 - **Eventbrite direct scraping:** disabled
 - **Eventbrite search discovery:** disabled
 - **Fallback cache was used:** No
