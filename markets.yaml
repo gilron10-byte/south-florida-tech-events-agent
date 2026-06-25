@@ -1,0 +1,102 @@
+markets:
+  - id: south_florida
+    name: South Florida
+    timezone: America/New_York
+    cities: [Miami, Miami Beach, Fort Lauderdale, Boca Raton, West Palm Beach, Palm Beach, South Florida]
+    output_file: output/south_florida_weekly_digest.md
+    cache_file: data/south_florida_last_successful_events.json
+    primary_sources:
+      - name: Refresh Miami Events
+        url: https://refreshmiami.com/events/
+        event_selector: article
+        max_events: 20
+      - name: Tech Hub South Florida Events
+        url: https://techhubsouthflorida.org/events/
+        event_selector: article
+        max_events: 20
+      - name: Eventbrite Miami Tech Events
+        url: https://www.eventbrite.com/d/fl--miami/technology--events/
+        max_events: 15
+        enabled: false
+    discovery_groups:
+      - name: Eventbrite Search Discovery
+        type: search_discovery
+        category: Eventbrite
+        max_events: 25
+        results_per_query: 10
+        queries:
+          - 'site:eventbrite.com/e/ Miami AI startup cloud'
+          - 'site:eventbrite.com/e/ "Fort Lauderdale" AI startup tech'
+          - 'site:eventbrite.com/e/ "West Palm Beach" technology startup'
+          - 'site:eventbrite.com/e/ "Boca Raton" AI cloud SaaS'
+          - 'site:eventbrite.com/e/ Miami AWS Azure DevOps cybersecurity SaaS'
+      - name: Luma / lu.ma Discovery
+        type: search_discovery
+        category: Luma
+        max_events: 25
+        results_per_query: 10
+        queries: ['site:lu.ma Miami AI startup founder cloud','site:lu.ma "Miami Tech Week" AI founder VC','site:lu.ma "Fort Lauderdale" startup AI','site:lu.ma "Palm Beach" tech founder','site:lu.ma Miami founders VC AI','site:lu.ma Miami SaaS startup']
+      - name: Meetup Discovery
+        type: search_discovery
+        category: Meetup
+        max_events: 25
+        results_per_query: 10
+        queries: ['site:meetup.com Miami AI startup technology','site:meetup.com "Fort Lauderdale" technology startup','site:meetup.com "West Palm Beach" tech AI','site:meetup.com "Boca Raton" technology meetup','site:meetup.com Miami cybersecurity meetup','site:meetup.com Miami product startup']
+      - name: FAU / Boca / Palm Beach Innovation Discovery
+        type: search_discovery
+        category: FAU / Boca / Palm Beach Innovation
+        max_events: 25
+        results_per_query: 10
+        queries: ['site:fau.edu "Tech Runway" events','site:research-park.org events Boca Raton technology','site:bric.com events Boca Raton tech','"Boca Raton Innovation Campus" tech events','Boca Raton startup tech events','Palm Beach tech startup events','West Palm Beach innovation technology events']
+      - name: Cybersecurity Discovery
+        type: search_discovery
+        category: Cybersecurity
+        max_events: 25
+        results_per_query: 10
+        queries: ['site:hackmiami.org events cybersecurity Miami','site:eventbrite.com/e/ HackMiami cybersecurity Miami','site:meetup.com Miami cybersecurity meetup','Miami cybersecurity cloud security events','Fort Lauderdale cybersecurity technology events','South Florida CISO cybersecurity events']
+      - name: University / Innovation Ecosystem Discovery
+        type: search_discovery
+        category: University / Innovation Ecosystem
+        max_events: 25
+        results_per_query: 10
+        queries: ['site:miami.edu events AI technology entrepreneurship','site:fiu.edu events cybersecurity AI entrepreneurship','site:mdc.edu events AI technology Miami','University of Miami startup technology event','FIU cybersecurity startup event','Miami Dade College AI technology event','NSU Levan Center technology startup event','site:nova.edu Levan Center technology events']
+      - name: Israeli / Jewish Business & Tech Discovery
+        type: search_discovery
+        category: Israeli / Jewish Business & Tech
+        max_events: 30
+        results_per_query: 10
+        queries: ['Israeli business community Miami events','Israeli entrepreneurs Miami events','Israeli tech founders Miami','Israeli founders South Florida','Israeli entrepreneurs Boca Raton','Israeli business Palm Beach events','Jewish business networking Miami tech','Jewish entrepreneurs Boca Raton events','IAC South Florida events','Israeli American Council Miami events','Jewish Federation Miami Israel business event','Jewish Federation South Palm Beach business networking','Jewish Federation Broward business professionals','Israel Florida business events','Florida Israel Business Accelerator Israeli tech events','Israel Florida Chamber of Commerce events','site:lu.ma Miami Israeli founders','site:lu.ma Miami Israel startup','site:eventbrite.com/e/ Miami Israeli tech','site:meetup.com Miami Israeli entrepreneurs','site:refreshmiami.com Israeli startup Miami','site:techhubsouthflorida.org Israeli tech']
+      - name: Cloud Provider Events
+        type: search_discovery
+        category: Cloud / Hyperscaler
+        max_events: 30
+        results_per_query: 10
+        queries: ['site:aws.amazon.com/events Miami AWS startup','site:aws.amazon.com/events AWS GenAI startup Miami','AWS Miami startup cloud event','AWS GenAI Miami event','AWS ISV Miami event','AWS partner Miami event','site:cloud.google.com/events Miami Google Cloud AI startup','Google Cloud Miami startup event','GCP Miami cloud AI event','Google Cloud cybersecurity data AI event Miami','site:microsoft.com/events Miami Azure AI startup','site:events.microsoft.com Miami Azure AI','Microsoft Azure Miami startup event','Microsoft for Startups Miami event']
+  - id: new_york
+    name: New York
+    timezone: America/New_York
+    cities: [New York, Manhattan, Brooklyn, Queens, Jersey City]
+    output_file: output/new_york_weekly_digest.md
+    cache_file: data/new_york_last_successful_events.json
+    primary_sources: []
+    discovery_groups:
+      - {name: AI / Startup / Founder Discovery, type: search_discovery, category: AI / Startup / Founder, max_events: 25, results_per_query: 10, queries: ['site:lu.ma New York AI startup founder cloud','site:lu.ma New York founders VC AI','site:meetup.com New York AI startup technology','site:eventbrite.com/e/ New York AI startup cloud','New York AI startup founder event','New York SaaS founder event','New York VC startup AI event']}
+      - {name: Cloud / AWS / Azure / GCP Discovery, type: search_discovery, category: Cloud / Hyperscaler, max_events: 25, results_per_query: 10, queries: ['New York AWS startup event','New York Azure AI event','New York Google Cloud startup event','AWS New York startup cloud event','Microsoft Azure New York AI startup event','Google Cloud New York AI startup event','site:aws.amazon.com/events "New York" AWS startup','site:microsoft.com/events "New York" Azure startup','site:events.microsoft.com "New York" Azure AI','site:cloud.google.com/events "New York" Google Cloud startup']}
+      - {name: Cybersecurity Discovery, type: search_discovery, category: Cybersecurity, max_events: 25, results_per_query: 10, queries: ['New York cybersecurity startup event','New York CISO cybersecurity event','site:meetup.com New York cybersecurity meetup','site:eventbrite.com/e/ New York cybersecurity cloud security','New York cloud security event']}
+      - {name: Israeli / Jewish Business & Tech Discovery, type: search_discovery, category: Israeli / Jewish Business & Tech, max_events: 25, results_per_query: 10, queries: ['New York Israeli founders tech events','Israeli entrepreneurs New York events','Israeli tech founders New York','Jewish business networking New York tech','Israeli startup New York event','Israel business New York technology event','site:lu.ma New York Israeli founders','site:eventbrite.com/e/ New York Israeli tech','site:meetup.com New York Israeli entrepreneurs']}
+      - {name: VC / SaaS / Enterprise Tech Discovery, type: search_discovery, category: VC / SaaS / Enterprise Tech, max_events: 25, results_per_query: 10, queries: ['New York SaaS enterprise tech event','New York VC SaaS founder event','New York enterprise AI event','New York product leadership technology event','New York CTO CPO technology event']}
+      - {name: Cloud Provider Events, type: search_discovery, category: Cloud / Hyperscaler, max_events: 30, results_per_query: 10, queries: ['site:aws.amazon.com/events "New York" AWS startup','site:aws.amazon.com/events AWS AI startup New York','AWS New York startup cloud event','AWS startup Loft New York events','site:cloud.google.com/events "New York" Google Cloud startup','Google Cloud New York AI startup event','GCP New York startup event','site:microsoft.com/events "New York" Azure AI startup','site:events.microsoft.com "New York" Azure startup','Microsoft Azure New York AI startup event','Microsoft for Startups New York event']}
+  - id: tel_aviv
+    name: Tel Aviv
+    timezone: Asia/Jerusalem
+    cities: [Tel Aviv, Herzliya, Ramat Gan, Givatayim, Ra'anana, Petah Tikva, Israel]
+    output_file: output/tel_aviv_weekly_digest.md
+    cache_file: data/tel_aviv_last_successful_events.json
+    primary_sources: []
+    discovery_groups:
+      - {name: AI / Startup / Founder Discovery, type: search_discovery, category: AI / Startup / Founder, max_events: 25, results_per_query: 10, queries: ['site:lu.ma Tel Aviv AI startup founder','site:meetup.com Tel Aviv AI startup cloud','site:eventbrite.com/e/ Tel Aviv AI startup','Tel Aviv AI startup founder event','Tel Aviv SaaS founder event','Herzliya startup AI cloud event']}
+      - {name: Cloud / AWS / Azure / GCP Discovery, type: search_discovery, category: Cloud / Hyperscaler, max_events: 25, results_per_query: 10, queries: ['Tel Aviv AWS startup event','Tel Aviv Azure AI event','Tel Aviv Google Cloud startup event','AWS Israel startup events','AWS Tel Aviv startup cloud event','AWS Israel GenAI event','Microsoft for Startups Israel event','Azure AI Israel startup event','Google Cloud Israel startup events','GCP Tel Aviv startup event','site:aws.amazon.com/events "Tel Aviv" AWS startup','site:microsoft.com/events "Tel Aviv" Azure AI','site:events.microsoft.com "Tel Aviv" Azure startup','site:cloud.google.com/events "Tel Aviv" Google Cloud startup']}
+      - {name: Cybersecurity Discovery, type: search_discovery, category: Cybersecurity, max_events: 25, results_per_query: 10, queries: ['Tel Aviv cybersecurity startup event','Israeli cybersecurity startup events Tel Aviv','Tel Aviv cloud security event','Israel CISO cybersecurity event','site:meetup.com Tel Aviv cybersecurity meetup','site:eventbrite.com/e/ Tel Aviv cybersecurity startup']}
+      - {name: VC / SaaS / Enterprise Tech Discovery, type: search_discovery, category: VC / SaaS / Enterprise Tech, max_events: 25, results_per_query: 10, queries: ['Tel Aviv SaaS founder event','Tel Aviv VC startup event','Tel Aviv enterprise AI event','Tel Aviv product leadership event','Tel Aviv CTO technology event','Herzliya SaaS startup event']}
+      - {name: Israeli Tech Ecosystem Discovery, type: search_discovery, category: Israeli Tech Ecosystem, max_events: 25, results_per_query: 10, queries: ['Israeli tech startup events Tel Aviv','Israeli founders event Tel Aviv','Israeli AI startup events','Israeli cloud startup events','Startup Nation Tel Aviv events','Tel Aviv innovation technology events']}
+      - {name: Cloud Provider Events, type: search_discovery, category: Cloud / Hyperscaler, max_events: 30, results_per_query: 10, queries: ['site:aws.amazon.com/events "Tel Aviv" AWS startup','site:aws.amazon.com/events AWS Israel Tel Aviv startup','AWS Tel Aviv startup cloud event','AWS Israel startup events','site:cloud.google.com/events "Tel Aviv" Google Cloud startup','Google Cloud Tel Aviv startup event','GCP Tel Aviv startup event','Google Cloud Israel startup events','site:microsoft.com/events "Tel Aviv" Azure startup','site:events.microsoft.com "Tel Aviv" Azure AI','Microsoft Azure Tel Aviv startup event','Microsoft for Startups Israel event','Azure AI Israel startup event']}
