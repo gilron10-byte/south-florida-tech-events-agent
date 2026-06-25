@@ -19,7 +19,6 @@ from dateutil import parser as date_parser
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES_FILE = ROOT / "sources.yaml"
 MARKETS_FILE = ROOT / "markets.yaml"
-OUTPUT_FILE = ROOT / "output" / "weekly_digest.md"
 GLOBAL_SUMMARY_FILE = ROOT / "output" / "global_weekly_summary.md"
 EASTERN_TZ = ZoneInfo("America/New_York")
 SEEN_EVENTS_FILE = ROOT / "data" / "seen_events.json"
@@ -94,12 +93,17 @@ class RunDiagnostics:
     search_queries_attempted: int = 0
     search_api_responses_received: int = 0
     eventbrite_urls_found_before_filtering: int = 0
+    blocked_missing_invalid_location: int = 0
+    blocked_wrong_market: int = 0
+    blocked_low_confidence: int = 0
+    blocked_generic_page: int = 0
+    promoted_to_main_digest: int = 0
     group_stats: dict[str, dict[str, Any]] = field(default_factory=dict)
     cloud_stats: dict[str, int] = field(default_factory=lambda: {"aws_queries": 0, "aws_candidates": 0, "gcp_queries": 0, "gcp_candidates": 0, "azure_queries": 0, "azure_candidates": 0})
 
 
 def default_market() -> dict[str, Any]:
-    return {"id":"south_florida","name":"South Florida","timezone":"America/New_York","cities":["Miami","Miami Beach","Fort Lauderdale","Boca Raton","West Palm Beach","Palm Beach","South Florida"],"output_file":"output/weekly_digest.md","cache_file":"data/last_successful_events.json","primary_sources":load_sources(),"discovery_groups":[]}
+    return {"id":"south_florida","name":"South Florida","timezone":"America/New_York","cities":["Miami","Miami Beach","Fort Lauderdale","Boca Raton","West Palm Beach","Palm Beach","South Florida"],"output_file":"output/south_florida_weekly_digest.md","cache_file":"data/last_successful_events.json","primary_sources":load_sources(),"discovery_groups":[]}
 
 
 def load_sources() -> list[dict[str, Any]]:
@@ -170,7 +174,7 @@ def fetch_source(source: dict[str, Any], market: dict[str, Any] | None = None) -
         if market:
             event.market_id = market["id"]
             event.discovery_group = "Primary sources"
-        events.append(event)
+        events.append(normalize_event_location(event))
         if len(events) >= int(source.get("max_events", 25)):
             break
     return events
@@ -255,7 +259,7 @@ def fetch_eventbrite_event_page(candidate: Event) -> Event:
     summary = str(summary_meta.get("content", "")).strip() if summary_meta else candidate.summary
     date_text = first_text(soup, ["time", "[class*=date]", "[class*=time]"])
     location = first_text(soup, ["[class*=location]", "[class*=venue]", "[data-testid*=location]"])
-    candidate.title, candidate.summary, candidate.date_text, candidate.location = title[:180], summary[:700], date_text, location
+    candidate.title, candidate.summary, candidate.date_text, candidate.location = title[:180], summary[:700], date_text, clean_location(location)
     candidate.parsed_date = parse_date(date_text)
     candidate.confidence = "high" if date_text and location else "medium" if date_text or location else "low"
     return candidate
@@ -294,6 +298,15 @@ def matching_terms(haystack: str, weighted_terms: dict[str, int]) -> list[tuple[
 
 def event_text(event: Event) -> str:
     return " ".join([event.title, event.location, clean_summary(event)]).lower()
+
+
+def clean_location(value: str) -> str:
+    return "" if "autocomplete" in (value or "").lower() else re.sub(r"\s+", " ", value or "").strip()
+
+
+def normalize_event_location(event: Event) -> Event:
+    event.location = clean_location(event.location)
+    return event
 
 
 def event_field_text(event: Event) -> tuple[str, str, str]:
@@ -360,20 +373,70 @@ def normalized_title(title: str) -> str:
 
 def is_event_page(event: Event) -> bool:
     haystack = event_text(event); url_path = urlparse(event.url).path.strip("/").lower()
-    blocked = ["submit an event", "add an event", "events calendar", "view all events", "all events", "search results", "category", "home", "jobs", "careers", "press release"]
+    blocked = ["submit an event", "add an event", "events calendar", "view all events", "all events", "search results", "category", "home", "jobs", "careers", "press release", "resource hub", "resources", "directory", "agenda", "recap", "facebook.com", "instagram.com", "linkedin.com/posts"]
     if any(t in haystack for t in blocked): return False
-    if url_path in {"", "events", "event", "search", "category", "calendar"}: return False
+    if url_path in {"", "events", "event", "search", "category", "calendar", "resources"}: return False
     if "eventbrite.com" in event.url.lower() and not is_eventbrite_event_url(event.url): return False
     return bool(event.title.strip() and (event.date_text.strip() or event.location.strip() or clean_summary(event).strip()))
 
 
+OTHER_MARKET_TERMS = ["paris", "zurich", "zürich", "los angeles", "philadelphia", "san francisco", "sydney", "brisbane", "london", "toronto", "berlin"]
+GENERIC_PAGE_TERMS = ["agenda", "official events", "events directory", "resource hub", "resources", "cloud resources", "meetup group", "group homepage", "facebook.com", "instagram.com", "linkedin.com/posts", "recap", "category"]
+
+
+def source_host(url: str) -> str:
+    return urlparse(url).netloc.lower().removeprefix("www.")
+
+
+def trusted_primary_source_match(event: Event, market: dict[str, Any]) -> bool:
+    host = source_host(event.url)
+    if not host:
+        return False
+    for source in market.get("primary_sources", []):
+        source_url = str(source.get("url", ""))
+        if source_url and host == source_host(source_url):
+            return True
+    return False
+
+
 def market_match(event: Event, market: dict[str, Any]) -> bool:
-    text = event_text(event) + " " + event.url.lower()
-    return any(str(city).lower() in text for city in market.get("cities", []))
+    title, location, summary = event_field_text(event)
+    url = event.url.lower()
+    city_terms = [str(city).lower() for city in market.get("cities", [])]
+    title_or_location = f"{title} {location}"
+    return (
+        any(contains_term(title_or_location, city) for city in city_terms)
+        or trusted_primary_source_match(event, market)
+        or any(contains_term(url, city.replace(" ", "-")) or contains_term(url, city.replace(" ", "")) for city in city_terms)
+        or sum(1 for city in city_terms if contains_term(summary, city)) >= 1
+    )
+
+
+def has_wrong_market(event: Event, market: dict[str, Any]) -> bool:
+    title_url = f"{event.title} {event.url}".lower()
+    target = any(contains_term(title_url, str(city).lower()) for city in market.get("cities", []))
+    return not target and any(contains_term(title_url, term) for term in OTHER_MARKET_TERMS if not any(contains_term(str(city).lower(), term) for city in market.get("cities", [])))
+
+
+def is_generic_directory_or_resource_page(event: Event) -> bool:
+    text = f"{event.title} {event.url} {clean_summary(event)}".lower()
+    path = urlparse(event.url).path.strip("/").lower()
+    if any(term in text for term in GENERIC_PAGE_TERMS):
+        return True
+    if path in {"", "events", "event", "calendar", "resources", "startup", "startups", "groups"}:
+        return True
+    if "meetup.com" in event.url.lower() and "/events/" not in event.url.lower():
+        return True
+    if "aws.amazon.com/events" in event.url.lower() and ("agenda" in text or path.rstrip("/").endswith("events")):
+        return True
+    if "cloud.google.com" in event.url.lower() and "resources" in path:
+        return True
+    return False
 
 
 def keep_event(event: Event, market: dict[str, Any] | None = None) -> bool:
     if not is_event_page(event): return False
+    if market and (has_wrong_market(event, market) or not market_match(event, market)): return False
     haystack = event_text(event)
     has_strategic = any(term in haystack for term in STRATEGIC_TERMS)
     has_city = any(city in haystack for city in market_city_weights(market))
@@ -394,6 +457,34 @@ def review_reason(event: Event) -> str:
     return "Possible event found by broad discovery; review manually before using."
 
 
+def candidate_block_reasons(event: Event, market: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    if not event.location:
+        reasons.append("missing/invalid location")
+    if has_wrong_market(event, market) or not market_match(event, market):
+        reasons.append("wrong or unclear market")
+    if event.confidence == "low":
+        reasons.append("low confidence")
+    if is_generic_directory_or_resource_page(event) or not is_event_page(event):
+        reasons.append("generic directory/resource page")
+    if not (event.date_text or event.parsed_date):
+        reasons.append("missing date")
+    if event.score < 6:
+        reasons.append("relevance score below 6")
+    return reasons
+
+
+def apply_block_diagnostics(reasons: list[str], diagnostics: RunDiagnostics) -> None:
+    if any("location" in r for r in reasons):
+        diagnostics.blocked_missing_invalid_location += 1
+    if any("market" in r for r in reasons):
+        diagnostics.blocked_wrong_market += 1
+    if any("low confidence" in r for r in reasons):
+        diagnostics.blocked_low_confidence += 1
+    if any("directory/resource" in r for r in reasons):
+        diagnostics.blocked_generic_page += 1
+
+
 def candidate_bucket(event: Event) -> str:
     text = (event.category + " " + event.discovery_group + " " + event.source + " " + event.url).lower()
     if "eventbrite" in text: return "Eventbrite"
@@ -411,17 +502,23 @@ def candidate_bucket(event: Event) -> str:
 
 
 def promote_search_event(event: Event, market: dict[str, Any]) -> bool:
+    normalize_event_location(event)
+    if event.confidence == "low": return False
     if event.score < 6 or not is_event_page(event): return False
     if not event.title or not event.url: return False
-    if not (event.date_text or event.parsed_date or "event" in clean_summary(event).lower()): return False
-    return bool(event.location or market_match(event, market))
+    if not (event.date_text or event.parsed_date): return False
+    if not event.location: return False
+    if is_generic_directory_or_resource_page(event): return False
+    if has_wrong_market(event, market): return False
+    return market_match(event, market)
 
 
 def eligible_for_top3(event: Event, market: dict[str, Any] | None = None) -> bool:
+    normalize_event_location(event)
     if event.confidence == "low" or event.is_candidate: return False
     if event.source != "Eventbrite via Search" and event.discovery_group == "Primary sources": return True
     if not (event.date_text or event.parsed_date) or not event.location: return False
-    if market and not market_match(event, market): return False
+    if market and (not market_match(event, market) or has_wrong_market(event, market)): return False
     return event.score >= 6 and len(event.title) >= 8
 
 
@@ -446,14 +543,12 @@ def fetch_search_discovery_source(source: dict[str, Any], diagnostics: RunDiagno
             if "eventbrite.com" in url.lower() and not is_eventbrite_event_url(url):
                 if stats: stats["discarded"] += 1
                 continue
-            if not is_likely_search_event(result["title"], url, result.get("snippet", "")):
-                if stats: stats["discarded"] += 1
-                continue
             source_label = "Eventbrite via Search" if "eventbrite.com" in url.lower() else group_name
             event = Event(result["title"][:180].strip(), url, source_label, summary=result.get("snippet", "")[:700], confidence="low", market_id=(market or {}).get("id", "south_florida"), discovery_group=group_name, category=source.get("category", group_name))
             if is_eventbrite_event_url(url):
                 try: event = fetch_eventbrite_event_page(event)
                 except requests.RequestException: pass
+            normalize_event_location(event)
             event.score = score_event(event, market)
             event.missing_fields = missing_fields(event); event.review_reason = review_reason(event)
             if diagnostics and is_cloud_provider_event(event):
@@ -608,9 +703,9 @@ def write_digest(events: list[Event], errors: list[str], diagnostics: RunDiagnos
     
     if market is None:
         market = default_market()
-        output_path = OUTPUT_FILE
+        output_path = ROOT / market.get("output_file", "output/south_florida_weekly_digest.md")
     else:
-        output_path = ROOT / market.get("output_file", "output/weekly_digest.md")
+        output_path = ROOT / market.get("output_file", "output/south_florida_weekly_digest.md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     cities=", ".join(market.get("cities", []))
@@ -625,7 +720,7 @@ def write_digest(events: list[Event], errors: list[str], diagnostics: RunDiagnos
         write_event_sections(lines, [], candidates or [], market=market)
     lines += ["## Sources", "", "Edit `markets.yaml` to add or remove market-specific public event pages and search discovery groups."]
     if errors: lines += ["", "## Source notes", ""] + [f"- {e}" for e in errors] + [""]
-    lines += ["## Run diagnostics", "", f"- **Market name:** {diagnostics.market_name}", f"- **Sources fetched successfully:** {', '.join(diagnostics.sources_fetched_successfully) if diagnostics.sources_fetched_successfully else 'None'}", f"- **Sources skipped:** {', '.join(diagnostics.sources_skipped) if diagnostics.sources_skipped else 'None'}", f"- **Search discovery groups enabled/disabled:** {'enabled' if os.environ.get('SEARCH_API_KEY','').strip() else 'disabled'}", f"- **Search API endpoint host:** {diagnostics.search_api_endpoint_host}", f"- **Number of search queries attempted:** {diagnostics.search_queries_attempted}", f"- **Number of search API responses received:** {diagnostics.search_api_responses_received}", f"- **Number of Eventbrite URLs found before filtering:** {diagnostics.eventbrite_urls_found_before_filtering}", f"- **Number of Eventbrite candidates found:** {diagnostics.eventbrite_candidates_found}", f"- **Number of raw events found:** {diagnostics.raw_events_found}", f"- **Number of events after filtering:** {diagnostics.events_after_filtering}", f"- **Number of events after deduplication:** {diagnostics.events_after_deduplication}", f"- **Eventbrite direct scraping:** {diagnostics.eventbrite_direct_scraping}", f"- **Eventbrite search discovery:** {diagnostics.eventbrite_search_discovery}", f"- **Fallback cache was used:** {'Yes' if diagnostics.fallback_cache_used else 'No'}"]
+    lines += ["## Run diagnostics", "", f"- **Market name:** {diagnostics.market_name}", f"- **Sources fetched successfully:** {', '.join(diagnostics.sources_fetched_successfully) if diagnostics.sources_fetched_successfully else 'None'}", f"- **Sources skipped:** {', '.join(diagnostics.sources_skipped) if diagnostics.sources_skipped else 'None'}", f"- **Search discovery groups enabled/disabled:** {'enabled' if os.environ.get('SEARCH_API_KEY','').strip() else 'disabled'}", f"- **Search API endpoint host:** {diagnostics.search_api_endpoint_host}", f"- **Number of search queries attempted:** {diagnostics.search_queries_attempted}", f"- **Number of search API responses received:** {diagnostics.search_api_responses_received}", f"- **Number of Eventbrite URLs found before filtering:** {diagnostics.eventbrite_urls_found_before_filtering}", f"- **Number of Eventbrite candidates found:** {diagnostics.eventbrite_candidates_found}", f"- **Number of raw events found:** {diagnostics.raw_events_found}", f"- **Number of events after filtering:** {diagnostics.events_after_filtering}", f"- **Number of events after deduplication:** {diagnostics.events_after_deduplication}", f"- **Candidates blocked due to missing/invalid location:** {diagnostics.blocked_missing_invalid_location}", f"- **Candidates blocked due to wrong market:** {diagnostics.blocked_wrong_market}", f"- **Candidates blocked due to low confidence:** {diagnostics.blocked_low_confidence}", f"- **Candidates blocked because they were generic directory/resource pages:** {diagnostics.blocked_generic_page}", f"- **Candidates promoted to main digest:** {diagnostics.promoted_to_main_digest}", f"- **Eventbrite direct scraping:** {diagnostics.eventbrite_direct_scraping}", f"- **Eventbrite search discovery:** {diagnostics.eventbrite_search_discovery}", f"- **Fallback cache was used:** {'Yes' if diagnostics.fallback_cache_used else 'No'}"]
     if diagnostics.fallback_reason: lines.append(f"- **Fallback reason:** {diagnostics.fallback_reason}")
     lines += ["", "### Discovery group diagnostics", ""]
     if diagnostics.group_stats:
@@ -651,13 +746,18 @@ def process_market(market: dict[str, Any], seen_event_ids: set[str]) -> tuple[li
             except requests.RequestException as exc: diagnostics.sources_skipped.append(source_name(source)); errors.append(source_note(source, exc)); continue
             stats=diagnostics.group_stats.get(source_name(source), {})
             for e in fetched:
+                normalize_event_location(e)
                 e.score=score_event(e, market); e.market_id=market["id"]; e.missing_fields=missing_fields(e); e.review_reason=review_reason(e)
-                if not is_event_page(e): stats["discarded"]=stats.get("discarded",0)+1; continue
+                block_reasons = candidate_block_reasons(e, market)
                 if promote_search_event(e, market) and keep_event(e, market) and e.event_id not in seen_event_ids:
-                    if e.confidence == "low": e.confidence = "medium" if not e.missing_fields else "low"
                     events_by_id[e.event_id]=e; stats["main"]=stats.get("main",0)+1
+                    diagnostics.promoted_to_main_digest += 1
                 else:
-                    e.is_candidate=True; e.confidence=e.confidence or "low"; candidates_by_id[e.event_id]=e; stats["review"]=stats.get("review",0)+1
+                    e.is_candidate=True; e.confidence=e.confidence or "low"
+                    if block_reasons:
+                        e.review_reason = "Blocked from Prioritized Events: " + "; ".join(block_reasons) + "."
+                        apply_block_diagnostics(block_reasons, diagnostics)
+                    candidates_by_id[e.event_id]=e; stats["review"]=stats.get("review",0)+1
                 stats["kept"]=stats.get("kept",0)+1
             continue
         if "eventbrite.com" in str(source.get("url", "")).lower(): diagnostics.eventbrite_direct_scraping = "enabled" if source.get("enabled", True) is not False else "disabled"
@@ -665,6 +765,7 @@ def process_market(market: dict[str, Any], seen_event_ids: set[str]) -> tuple[li
         try: fetched=fetch_source(source, market); diagnostics.sources_fetched_successfully.append(source_name(source)); diagnostics.raw_events_found += len(fetched)
         except requests.RequestException as exc: diagnostics.sources_skipped.append(source_name(source)); errors.append(source_note(source, exc)); continue
         for e in fetched:
+            normalize_event_location(e)
             e.score=score_event(e, market)
             if e.event_id not in seen_event_ids and keep_event(e, market): events_by_id[e.event_id]=e
     diagnostics.events_after_filtering=len(events_by_id)
