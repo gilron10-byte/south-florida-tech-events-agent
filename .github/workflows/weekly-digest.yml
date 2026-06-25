@@ -2,9 +2,8 @@ name: Generate weekly event digest
 
 on:
   workflow_dispatch:
-  # Uncomment when you are ready to run automatically every Monday at 8 AM UTC.
-  # schedule:
-  #   - cron: "0 8 * * 1"
+  schedule:
+    - cron: "0 8 * * 1"
 
 jobs:
   generate-digest:

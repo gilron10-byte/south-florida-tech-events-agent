@@ -19,48 +19,89 @@ SOURCES_FILE = ROOT / "sources.yaml"
 OUTPUT_FILE = ROOT / "output" / "weekly_digest.md"
 SEEN_EVENTS_FILE = ROOT / "data" / "seen_events.json"
 
-TARGET_CITIES = [
-    "miami",
-    "miami beach",
-    "fort lauderdale",
-    "boca raton",
-    "west palm beach",
-]
-KEYWORDS = [
-    "ai",
-    "artificial intelligence",
-    "cloud",
-    "aws",
-    "amazon web services",
-    "azure",
-    "startup",
-    "startups",
-    "cybersecurity",
-    "cyber security",
-    "saas",
-    "devops",
-    "data",
-    "product",
-    "engineering",
-    "engineer",
-    "enterprise tech",
-]
-BUSINESS_TERMS = [
-    "founder",
-    "customer",
-    "partner",
-    "partnership",
-    "networking",
-    "enterprise",
-    "aws",
-    "azure",
-    "startup",
-    "investor",
-    "cto",
-    "cio",
-    "ciso",
-]
-USER_AGENT = "SouthFloridaTechEventsAgent/0.1 (+https://github.com/)"
+TARGET_CITIES = {
+    "miami": 4,
+    "miami beach": 4,
+    "fort lauderdale": 4,
+    "boca raton": 4,
+    "west palm beach": 4,
+    "palm beach": 2,
+    "south florida": 2,
+}
+STRATEGIC_TERMS = {
+    "aws": 8,
+    "amazon web services": 8,
+    "azure": 8,
+    "cloud": 7,
+    "cloud computing": 7,
+    "ai": 6,
+    "artificial intelligence": 6,
+    "cybersecurity": 6,
+    "cyber security": 6,
+    "devops": 6,
+    "data": 5,
+    "analytics": 4,
+    "saas": 5,
+    "startup": 5,
+    "startups": 5,
+    "founder": 5,
+    "vc": 5,
+    "venture capital": 5,
+    "cto": 5,
+    "cio": 5,
+    "cpo": 5,
+    "ciso": 5,
+    "enterprise": 5,
+    "product": 4,
+    "engineering": 4,
+    "engineer": 3,
+}
+AUDIENCE_TERMS = {
+    "executive": 4,
+    "leadership": 4,
+    "c-level": 4,
+    "decision maker": 4,
+    "founder": 4,
+    "investor": 4,
+    "enterprise": 4,
+    "cto": 5,
+    "cio": 5,
+    "cpo": 5,
+    "ciso": 5,
+    "vp": 3,
+    "director": 3,
+}
+BUSINESS_VALUE_TERMS = {
+    "partner": 4,
+    "partnership": 4,
+    "customer": 4,
+    "client": 4,
+    "networking": 3,
+    "summit": 3,
+    "conference": 3,
+    "roundtable": 3,
+    "workshop": 2,
+    "meetup": 2,
+    "aws": 4,
+    "azure": 4,
+}
+LOW_VALUE_TERMS = {
+    "social": -5,
+    "party": -5,
+    "happy hour": -4,
+    "consumer": -5,
+    "concert": -8,
+    "festival": -6,
+    "yoga": -8,
+    "market": -4,
+    "student only": -8,
+    "students only": -8,
+    "for students": -5,
+    "career fair": -3,
+    "unclear": -3,
+}
+KEYWORDS = list(STRATEGIC_TERMS)
+USER_AGENT = "SouthFloridaTechEventsAgent/0.2 (+https://github.com/)"
 
 
 @dataclass
@@ -148,42 +189,43 @@ def fetch_source(source: dict[str, Any]) -> list[Event]:
         date_text = first_text(card, [source.get("date_selector", ""), "time", ".date", "[class*=date]", "[datetime]"])
         location = first_text(card, [source.get("location_selector", ""), ".location", "[class*=location]", "[class*=venue]"])
         link = first_link(card, url, source.get("link_selector"))
-        summary = text_or_empty(card)[:500]
-        events.append(
-            Event(
-                title=title,
-                url=link,
-                source=source.get("name", url),
-                date_text=date_text,
-                location=location,
-                summary=summary,
-                parsed_date=parse_date(date_text),
-            )
-        )
+        summary = text_or_empty(card)[:700]
+        events.append(Event(title, link, source.get("name", url), date_text, location, summary, parse_date(date_text)))
         if len(events) >= max_events:
             break
     return events
 
 
+def matching_terms(haystack: str, weighted_terms: dict[str, int]) -> list[tuple[str, int]]:
+    return [(term, weight) for term, weight in weighted_terms.items() if term in haystack]
+
+
 def score_event(event: Event) -> int:
     haystack = " ".join([event.title, event.location, event.summary]).lower()
-    score = 0
-    score += sum(3 for keyword in KEYWORDS if keyword in haystack)
-    score += sum(2 for city in TARGET_CITIES if city in haystack)
-    score += sum(1 for term in BUSINESS_TERMS if term in haystack)
+    score = 10
+    score += sum(weight for _, weight in matching_terms(haystack, STRATEGIC_TERMS))
+    score += sum(weight for _, weight in matching_terms(haystack, TARGET_CITIES))
+    score += sum(weight for _, weight in matching_terms(haystack, AUDIENCE_TERMS))
+    score += sum(weight for _, weight in matching_terms(haystack, BUSINESS_VALUE_TERMS))
+    score += sum(weight for _, weight in matching_terms(haystack, LOW_VALUE_TERMS))
+    if not event.summary or len(event.summary) < 80:
+        score -= 3
+    if not any(term in haystack for term in BUSINESS_VALUE_TERMS):
+        score -= 2
     if event.parsed_date:
         now = datetime.now(timezone.utc)
         if now <= event.parsed_date <= now + timedelta(days=14):
-            score += 4
-    return score
+            score += 5
+        elif event.parsed_date < now - timedelta(days=1):
+            score -= 6
+    return max(0, min(score, 100))
 
 
 def keep_event(event: Event) -> bool:
     haystack = " ".join([event.title, event.location, event.summary]).lower()
-    has_keyword = any(keyword in haystack for keyword in KEYWORDS)
-    has_city = any(city in haystack for city in TARGET_CITIES)
-    # Some event listing pages omit city names in each card. Keep strong keyword matches.
-    return has_keyword and (has_city or event.score >= 5)
+    has_strategic_term = any(term in haystack for term in STRATEGIC_TERMS)
+    has_target_city = any(city in haystack for city in TARGET_CITIES)
+    return event.score >= 12 and has_strategic_term and (has_target_city or event.score >= 22)
 
 
 def load_seen_event_ids() -> set[str]:
@@ -198,6 +240,40 @@ def load_seen_event_ids() -> set[str]:
     return set(data.get("seen_event_ids", [])) if isinstance(data, dict) else set()
 
 
+def format_date(event: Event) -> str:
+    if event.parsed_date:
+        return event.parsed_date.strftime("%Y-%m-%d %H:%M %Z").strip()
+    return event.date_text or "Date/time not listed"
+
+
+def why_this_matters(event: Event) -> str:
+    haystack = " ".join([event.title, event.location, event.summary]).lower()
+    strategic = [term for term, _ in matching_terms(haystack, STRATEGIC_TERMS)[:3]]
+    audience = [term for term, _ in matching_terms(haystack, AUDIENCE_TERMS)[:2]]
+    city = next((city.title() for city in TARGET_CITIES if city in haystack), event.location or "South Florida")
+    if any(term in haystack for term in ["aws", "amazon web services", "azure", "cloud"]):
+        return f"Strong cloud-alignment in {city}; useful for finding modernization prospects and strengthening AWS/Azure ecosystem relationships."
+    if any(term in haystack for term in ["founder", "startup", "startups", "vc", "venture capital"]):
+        return f"Founder and startup audience in {city}; good for partnership conversations, portfolio referrals, and early cloud architecture needs."
+    if any(term in haystack for term in ["cybersecurity", "cyber security", "devops", "data", "ai", "artificial intelligence"]):
+        topic = ", ".join(strategic) or "technical"
+        return f"Focused on {topic} in {city}; relevant for consultative conversations around secure, scalable cloud implementation."
+    if audience:
+        return f"Likely senior audience ({', '.join(audience)}) in {city}; worth evaluating for enterprise relationship-building."
+    return f"Potential local tech networking in {city}; review details before investing business-development time."
+
+
+def suggested_action(event: Event) -> str:
+    haystack = " ".join([event.title, event.location, event.summary]).lower()
+    if event.score >= 45 and any(term in haystack for term in ["conference", "summit", "aws", "azure", "enterprise", "cto", "cio"]):
+        return "Sponsor"
+    if event.score >= 32:
+        return "Attend"
+    if event.score >= 20:
+        return "Send AE"
+    return "Ignore"
+
+
 def write_digest(events: list[Event], errors: list[str]) -> None:
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -206,43 +282,60 @@ def write_digest(events: list[Event], errors: list[str]) -> None:
         "",
         f"Generated: {generated_at}",
         "",
-        "Focus: Miami, Miami Beach, Fort Lauderdale, Boca Raton, and West Palm Beach events for AI, cloud, AWS, Azure, startups, cybersecurity, SaaS, DevOps, data, product, and engineering.",
+        "Executive focus: business-development opportunities for a cloud consulting company across Miami, Fort Lauderdale, Boca Raton, and West Palm Beach.",
         "",
     ]
 
-    if not events:
+    if events:
+        lines.extend(["## Top 3 Recommendations", ""])
+        for index, event in enumerate(events[:3], start=1):
+            lines.extend([
+                f"{index}. **{event.title}** — {suggested_action(event)}; score {event.score}.",
+                f"   - {why_this_matters(event)}",
+                f"   - {event.url}",
+            ])
+        lines.append("")
+        lines.extend(["## Prioritized Events", ""])
+        for index, event in enumerate(events, start=1):
+            lines.extend([
+                f"### {index}. {event.title}",
+                f"- **Event name:** {event.title}",
+                f"- **Date and time:** {format_date(event)}",
+                f"- **Location:** {event.location or 'Location not listed'}",
+                f"- **Source:** {event.source}",
+                f"- **URL:** {event.url}",
+                f"- **Relevance score:** {event.score}/100",
+                f"- **Why this matters for a cloud consulting company:** {why_this_matters(event)}",
+                f"- **Suggested action:** {suggested_action(event)}",
+                "",
+            ])
+    else:
         lines.extend([
-            "## No matching events found",
+            "## Top 3 Recommendations",
+            "",
+            "No qualifying business-development events were found in this run.",
+            "",
+            "## Prioritized Events",
             "",
             "No matching events were found from the configured public sources. Try adding more sources to `sources.yaml` or rerun later.",
             "",
         ])
-    else:
-        lines.extend(["## Prioritized Events", ""])
-        for index, event in enumerate(events, start=1):
-            date = event.parsed_date.strftime("%Y-%m-%d") if event.parsed_date else event.date_text or "Date not listed"
-            location = event.location or "Location not listed"
-            lines.extend([
-                f"### {index}. [{event.title}]({event.url})",
-                f"- **Date:** {date}",
-                f"- **Location:** {location}",
-                f"- **Source:** {event.source}",
-                f"- **Business-development fit score:** {event.score}",
-                f"- **Why it may matter:** Relevant to local cloud, AI, DevOps, cybersecurity, SaaS, startup, product, data, or engineering networking.",
-                "",
-            ])
 
     if errors:
-        lines.extend(["## Source fetch notes", ""])
+        lines.extend(["## Source notes", ""])
         lines.extend(f"- {error}" for error in errors)
         lines.append("")
 
-    lines.extend([
-        "## Sources",
-        "",
-        "Edit `sources.yaml` to add or remove public event pages.",
-    ])
+    lines.extend(["## Sources", "", "Edit `sources.yaml` to add or remove public event pages."])
     OUTPUT_FILE.write_text("\n".join(lines), encoding="utf-8")
+
+
+def source_note(source: dict[str, Any], exc: requests.RequestException) -> str:
+    name = source.get("name", source.get("url", "Unknown source"))
+    status = getattr(exc.response, "status_code", None)
+    if status:
+        return f"{name} was skipped because the site returned HTTP {status}."
+    return f"{name} was skipped because it could not be reached this run."
 
 
 def main() -> None:
@@ -258,16 +351,9 @@ def main() -> None:
                 if event.event_id not in seen_event_ids and keep_event(event):
                     events_by_id[event.event_id] = event
         except requests.RequestException as exc:
-            errors.append(f"Could not fetch {source.get('name', source.get('url'))}: {exc}")
+            errors.append(source_note(source, exc))
 
-    events = sorted(
-        events_by_id.values(),
-        key=lambda event: (
-            -event.score,
-            event.parsed_date or datetime.max.replace(tzinfo=timezone.utc),
-            event.title.lower(),
-        ),
-    )[:25]
+    events = sorted(events_by_id.values(), key=lambda event: (-event.score, event.parsed_date or datetime.max.replace(tzinfo=timezone.utc), event.title.lower()))[:25]
     write_digest(events, errors)
     print(f"Wrote {OUTPUT_FILE.relative_to(ROOT)} with {len(events)} event(s).")
 
