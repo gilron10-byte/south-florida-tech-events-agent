@@ -674,11 +674,39 @@ def ranking_key(event: Event) -> tuple[int,int,int,int,int,datetime,str]:
     return (-cat,-conf,-event.score,-bonus,event.recurring_count if is_generic_networking(event) else 0,event.parsed_date or datetime.max.replace(tzinfo=timezone.utc),event.title.lower())
 
 
+def has_real_location(event: Event) -> bool:
+    location = clean_location(event.location).lower()
+    return bool(location and location != "location not listed")
+
+
 def top_recommendations(events: list[Event], limit: int = 3, market: dict[str, Any] | None = None) -> list[Event]:
-    eligible=[e for e in events if eligible_for_top3(e, market) and not is_generic_networking(e)]
-    selected=sorted(eligible,key=ranking_key)[:limit]
-    if len(selected)<limit:
-        selected.extend(e for e in sorted([e for e in events if eligible_for_top3(e, market)],key=ranking_key) if e not in selected)
+    eligible=[e for e in events if eligible_for_top3(e, market)]
+    strategic=[e for e in eligible if not is_generic_networking(e)]
+    pool=strategic or eligible
+    ranked=sorted(pool,key=ranking_key)
+    selected: list[Event] = []
+    for event in ranked:
+        if event in selected:
+            continue
+        if not has_real_location(event):
+            location_alternative = next((
+                other for other in ranked
+                if other not in selected and has_real_location(other) and other.score >= event.score - 1
+            ), None)
+            if location_alternative is not None:
+                selected.append(location_alternative)
+                if len(selected)>=limit:
+                    break
+                continue
+        selected.append(event)
+        if len(selected)>=limit:
+            break
+    if len(selected)<limit and pool is not eligible:
+        for e in sorted(eligible,key=ranking_key):
+            if e not in selected:
+                selected.append(e)
+            if len(selected)>=limit:
+                break
     return selected[:limit]
 
 
@@ -716,10 +744,12 @@ def suggested_action(event: Event) -> str:
 
 
 def write_event_sections(lines: list[str], events: list[Event], candidates: list[Event] | None = None, high_priority: list[Event] | None = None, fallback: bool = False, market: dict[str, Any] | None = None) -> None:
-    if fallback:
+    if not events and not fallback:
+        section_events=[]
+    elif fallback:
         lines += ["## Fallback: last known relevant events", "", "Current sources failed or produced no usable events, so this section uses events saved from the previous successful run. Confirm dates and availability before outreach.", ""]
         section_events=events
-    else:
+    elif events:
         top=top_recommendations(events, market=market); lines += ["## Top 3 Recommendations", ""]
         if not top: lines += ["No qualifying Top 3 recommendations were found for this market.", ""]
         for i,e in enumerate(top,1):
@@ -736,15 +766,21 @@ def write_event_sections(lines: list[str], events: list[Event], candidates: list
     if candidates is not None:
         lines += ["## Candidates to review", ""]
         if not candidates: lines += ["No low-confidence search candidates were retained for manual review.", ""]
+        visible_candidates = candidates[:50]
+        hidden_for_readability = len(candidates) > len(visible_candidates)
         buckets: dict[str,list[Event]]={}
-        for c in candidates: buckets.setdefault(candidate_bucket(c), []).append(c)
+        for c in visible_candidates: buckets.setdefault(candidate_bucket(c), []).append(c)
         order=["Eventbrite","Luma","Meetup","FAU / Boca / Palm Beach Innovation","Cybersecurity","Cloud / Hyperscaler","AWS","Google Cloud / GCP","Microsoft / Azure","University / Innovation Ecosystem","Israeli / Jewish Business & Tech","Other search discovery"]
         for bucket in order:
             items=buckets.get(bucket, [])
             if not items: continue
             lines += [f"### {bucket}", ""]
-            for c in items[:20]:
+            if len(items) > 10:
+                hidden_for_readability = True
+            for c in items[:10]:
                 lines += [f"- **Title:** {c.title}", f"  - **URL:** {c.url}", f"  - **Source / discovery group:** {c.source} / {c.discovery_group}", f"  - **Confidence:** {c.confidence}", f"  - **Market:** {(market or {}).get('name', c.market_id)}", f"  - **Reason to review:** {c.review_reason or review_reason(c)}", f"  - **Missing fields:** {', '.join(c.missing_fields or missing_fields(c)) or 'None'}", "  - **Suggested action:** Review manually", ""]
+        if hidden_for_readability:
+            lines += ["Additional candidates were found but hidden for readability.", ""]
 
 
 def write_digest(events: list[Event], errors: list[str], diagnostics: RunDiagnostics, fallback_events: list[Event] | None = None, market: dict[str, Any] | None = None, candidates: list[Event] | None = None) -> None:

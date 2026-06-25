@@ -384,3 +384,73 @@ def test_generic_directory_page_goes_to_candidates_not_main() -> None:
     event.score = 10
     assert main.is_generic_directory_or_resource_page(event)
     assert not main.promote_search_event(event, market)
+
+
+def test_top3_prefers_real_location_over_similar_missing_location() -> None:
+    market = {"id": "south_florida", "name": "South Florida", "timezone": "America/New_York", "cities": ["Miami", "Fort Lauderdale"]}
+    founders_circle = main.Event(
+        title="Miami Founder’s Circle AI Startup Roundtable",
+        url="https://example.com/founders-circle",
+        source="Primary",
+        date_text="July 8, 2026",
+        location="",
+        summary="Founders discuss AI startup growth, SaaS, cloud architecture, and investor readiness in Miami.",
+        parsed_date=main.parse_date("July 8, 2026"),
+        confidence="high",
+        market_id="south_florida",
+    )
+    founders_circle.score = 6
+    fintech = main.Event(
+        title="Fort Lauderdale Tech Meetup • Building an AI-first Fintech Startup",
+        url="https://example.com/fort-lauderdale-ai-fintech",
+        source="Primary",
+        date_text="July 9, 2026",
+        location="Fort Lauderdale, FL",
+        summary="Founders and builders discuss AI-first fintech startup architecture, cloud platforms, SaaS growth, and engineering decisions.",
+        parsed_date=main.parse_date("July 9, 2026"),
+        confidence="high",
+        market_id="south_florida",
+    )
+    fintech.score = 6
+
+    assert main.top_recommendations([founders_circle, fintech], limit=1, market=market) == [fintech]
+
+
+def test_empty_digest_does_not_duplicate_empty_recommendation_sections(tmp_path, monkeypatch) -> None:
+    market = {"id": "south_florida", "name": "South Florida", "timezone": "America/New_York", "cities": ["Miami"], "output_file": "output/south_florida_weekly_digest.md"}
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    diagnostics = main.RunDiagnostics([], [], market_name="South Florida")
+
+    main.write_digest([], [], diagnostics, market=market, candidates=[])
+
+    digest = (tmp_path / "output" / "south_florida_weekly_digest.md").read_text(encoding="utf-8")
+    assert digest.count("## Top 3 Recommendations") == 0
+    assert digest.count("## Recommended next steps") == 0
+    assert digest.count("## Prioritized Events") == 0
+    assert digest.count("No qualifying business-development events were found in this run.") == 1
+
+
+def test_candidates_to_review_are_limited_for_readability(tmp_path, monkeypatch) -> None:
+    market = {"id": "south_florida", "name": "South Florida", "timezone": "America/New_York", "cities": ["Miami"], "output_file": "output/south_florida_weekly_digest.md"}
+    monkeypatch.setattr(main, "ROOT", tmp_path)
+    diagnostics = main.RunDiagnostics([], [], market_name="South Florida")
+    candidates = []
+    for i in range(12):
+        event = main.Event(
+            title=f"Miami AI Review Candidate {i}",
+            url=f"https://example.com/events/miami-ai-review-{i}",
+            source="Other Search Discovery",
+            summary="Miami AI cloud startup candidate requiring review.",
+            confidence="low",
+            market_id="south_florida",
+            discovery_group="Other search discovery",
+        )
+        event.score = 6
+        event.missing_fields = main.missing_fields(event)
+        candidates.append(event)
+
+    main.write_digest([], [], diagnostics, market=market, candidates=candidates)
+
+    digest = (tmp_path / "output" / "south_florida_weekly_digest.md").read_text(encoding="utf-8")
+    assert digest.count("- **Title:** Miami AI Review Candidate") == 10
+    assert "Additional candidates were found but hidden for readability." in digest

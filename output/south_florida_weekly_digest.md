@@ -1,6 +1,6 @@
 # South Florida Tech Events Weekly Digest
 
-Generated: 2026-06-25 23:17 UTC
+Generated: 2026-06-25 23:26 UTC
 
 Executive focus: business-development opportunities for a cloud consulting company across Miami, Miami Beach, Fort Lauderdale, Boca Raton, West Palm Beach, Palm Beach, South Florida.
 
@@ -8,16 +8,6 @@ Executive focus: business-development opportunities for a cloud consulting compa
 
 No qualifying business-development events were found in this run.
 Reason: One or more sources failed or were skipped, and no fallback cache was available.
-
-## Top 3 Recommendations
-
-No qualifying Top 3 recommendations were found for this market.
-
-## Recommended next steps
-
-- Review High-priority candidates to verify for strong manually verifiable events.
-
-## Prioritized Events
 
 ## High-priority candidates to verify
 
