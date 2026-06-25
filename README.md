@@ -61,18 +61,33 @@ The score is intentionally directional rather than scientific:
 - **5-7:** Worth a targeted follow-up. These events may be good places to send an account executive or technical person, especially when they are in Miami, Fort Lauderdale, Boca Raton, West Palm Beach, or another South Florida market.
 - **1-4:** Low priority. These are often generic social events, consumer-oriented events, student-only events, events with unclear technology/business audiences, or listings with missing location/detail.
 
+The script scores separate event fields instead of treating every scraped word equally:
+
+- **Title:** highest weight, because it is usually the cleanest indicator of audience and topic.
+- **Location:** moderate weight, especially for Miami, Fort Lauderdale, Boca Raton, West Palm Beach, and nearby South Florida markets.
+- **Cleaned summary/description:** lower weight after duplicate title/date/location fragments are removed, which prevents repeated website boilerplate from dominating the score.
+
+The script classifies events into practical sales-coverage types:
+
+- **Executive/buyer:** CTO, CPO, CIO, CISO, chief, VP, director, product leader, engineering leader, and similar senior audience signals.
+- **Strategic technical:** AI, agentic workflows, cloud, AWS, Azure, DevOps, cybersecurity, data, SaaS, and related delivery topics.
+- **Startup/founder:** founder, startup, VC, fintech, SaaS, and investor-oriented signals.
+- **Generic networking:** networking, connect, happy hour, mixer, recurring meetup, broad community event, and similar broad-coverage signals.
+
 The script increases scores for:
 
-- CTO, CPO, CIO, CISO, founder, investor, VC, executive, VP, director, startup, SaaS, enterprise, product, engineering, AI, agentic, cloud, AWS, Azure, cybersecurity, DevOps, and data signals.
-- Events likely to include senior decision makers or buyer-adjacent audiences.
+- Executive/buyer events, especially when senior audience terms appear in the title.
+- Strategic AI, agentic, cloud, AWS, Azure, cybersecurity, DevOps, data, SaaS, product, and engineering events.
+- Startup/founder events when they are tied to AI, fintech, SaaS, cloud, or enterprise technology.
 - Events in Miami, Fort Lauderdale, Boca Raton, West Palm Beach, and nearby South Florida locations.
-- Events useful for partnerships, customer networking, AWS/Azure ecosystem relationships, or local founder relationships.
 
 The script lowers scores for:
 
-- Generic social events, parties, consumer events, concerts, festivals, student-only events, and career fairs.
+- Generic recurring networking events, broad mixers, generic social events, parties, consumer events, concerts, festivals, student-only events, and career fairs.
 - Events with no clear technology/business audience.
 - Events with missing locations unless the title and audience are highly relevant.
+
+Generic recurring networking is capped at **6/10** unless the title clearly includes executive/buyer, founder, enterprise, or strategic technical terms. Suggested actions also reflect the classification: executive/buyer events at 7+ recommend personal attendance, focused AI/cloud/startup events at 6+ recommend senior AE or technical coverage, and broad recurring networking recommends AE coverage or tracking rather than personal attendance.
 
 ## Changing event sources
 

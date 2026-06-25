@@ -217,12 +217,50 @@ def fetch_source(source: dict[str, Any]) -> list[Event]:
     return events
 
 
+def clean_text(value: str) -> str:
+    """Normalize scraped text and remove duplicate fragments that can distort scoring."""
+    normalized = re.sub(r"\s+", " ", value or "").strip()
+    if not normalized:
+        return ""
+    parts = re.split(r"(?<=[.!?])\s+|\s+[•|]\s+", normalized)
+    cleaned_parts: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        part = part.strip(" -–—•|\t\n")
+        if len(part) < 3:
+            continue
+        key = re.sub(r"\W+", " ", part.lower()).strip()
+        if key and key not in seen:
+            cleaned_parts.append(part)
+            seen.add(key)
+    return " ".join(cleaned_parts)
+
+
+def clean_summary(event: Event) -> str:
+    """Return summary text without title/date/location boilerplate."""
+    summary = clean_text(event.summary)
+    for duplicate in [event.title, event.date_text, event.location]:
+        duplicate = clean_text(duplicate)
+        if duplicate:
+            summary = re.sub(re.escape(duplicate), " ", summary, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", summary).strip()[:500]
+
+
+def contains_term(text: str, term: str) -> bool:
+    pattern = r"(?<![a-z0-9])" + re.escape(term.lower()) + r"(?![a-z0-9])"
+    return bool(re.search(pattern, text.lower()))
+
+
 def matching_terms(haystack: str, weighted_terms: dict[str, int]) -> list[tuple[str, int]]:
-    return [(term, weight) for term, weight in weighted_terms.items() if term in haystack]
+    return [(term, weight) for term, weight in weighted_terms.items() if contains_term(haystack, term)]
 
 
 def event_text(event: Event) -> str:
-    return " ".join([event.title, event.location, event.summary]).lower()
+    return " ".join([event.title, event.location, clean_summary(event)]).lower()
+
+
+def event_field_text(event: Event) -> tuple[str, str, str]:
+    return event.title.lower(), event.location.lower(), clean_summary(event).lower()
 
 
 def normalized_title(title: str) -> str:
@@ -248,63 +286,115 @@ def is_event_page(event: Event) -> bool:
     return bool(event.date_text.strip() or event.location.strip())
 
 
+EXECUTIVE_BUYER_TERMS = [
+    "cto", "cpo", "cio", "ciso", "chief", "vp", "vice president", "director",
+    "product leader", "product leaders", "engineering leader", "engineering leaders",
+    "executive", "buyer", "decision maker", "decision makers",
+]
+STRATEGIC_TECHNICAL_TERMS = [
+    "ai", "artificial intelligence", "agentic", "cloud", "aws", "amazon web services",
+    "azure", "devops", "cybersecurity", "cyber security", "data", "saas",
+]
+STARTUP_FOUNDER_TERMS = ["founder", "startup", "startups", "vc", "venture capital", "fintech", "saas"]
+GENERIC_NETWORKING_TERMS = ["networking", "connect", "happy hour", "mixer", "recurring meetup", "community event", "social"]
+
+
+def contains_any(text: str, terms: list[str]) -> bool:
+    return any(contains_term(text, term) for term in terms)
+
+
+def has_title_terms(event: Event, terms: list[str]) -> bool:
+    return contains_any(event.title.lower(), terms)
+
+
 def has_executive_audience(event: Event) -> bool:
-    return any(term in event_text(event) for term in ["cto", "cpo", "cio", "ciso", "chief ", "executive", "founder", "vp ", "vice president", "director", "leadership", "buyer", "decision maker"])
+    title, location, summary = event_field_text(event)
+    return contains_any(title, EXECUTIVE_BUYER_TERMS) or contains_any(summary, EXECUTIVE_BUYER_TERMS)
 
 
 def has_strategic_technical_topic(event: Event) -> bool:
-    return any(term in event_text(event) for term in ["ai", "artificial intelligence", "agentic", "agentic workflow", "cloud", "aws", "amazon web services", "azure", "devops", "cybersecurity", "cyber security", "saas", "data", "engineering"])
+    title, location, summary = event_field_text(event)
+    return contains_any(title, STRATEGIC_TECHNICAL_TERMS) or contains_any(summary, STRATEGIC_TECHNICAL_TERMS)
+
+
+def has_startup_founder_topic(event: Event) -> bool:
+    title, location, summary = event_field_text(event)
+    return contains_any(title, STARTUP_FOUNDER_TERMS) or contains_any(summary, STARTUP_FOUNDER_TERMS)
 
 
 def is_generic_networking(event: Event) -> bool:
-    haystack = event_text(event)
-    return any(term in haystack for term in ["networking", "mixer", "happy hour", "social"]) and not has_executive_audience(event) and not has_strategic_technical_topic(event)
+    title, location, summary = event_field_text(event)
+    text = " ".join([title, summary])
+    clearly_strategic_title = has_title_terms(event, EXECUTIVE_BUYER_TERMS + STRATEGIC_TECHNICAL_TERMS + STARTUP_FOUNDER_TERMS + ["enterprise"])
+    return contains_any(text, GENERIC_NETWORKING_TERMS) and not clearly_strategic_title
+
+
+def is_recurring_generic_networking(event: Event) -> bool:
+    title = event.title.lower()
+    return is_generic_networking(event) and (event.recurring_count > 1 or contains_any(title, ["every ", "weekly", "monthly", "recurring", "mondays", "tuesdays", "wednesdays", "thursdays", "fridays"]))
 
 
 def event_category(event: Event) -> str:
-    haystack = event_text(event)
     if has_executive_audience(event):
         return "executive/buyer"
-    if any(term in haystack for term in ["agentic", "ai", "artificial intelligence"]):
-        return "ai/agentic"
-    if any(term in haystack for term in ["aws", "amazon web services", "azure", "cloud", "devops"]):
-        return "cloud/devops"
-    if any(term in haystack for term in ["cybersecurity", "cyber security"]):
-        return "cybersecurity"
-    if any(term in haystack for term in ["startup", "saas", "founder", "vc", "venture capital", "fintech"]):
-        return "startup/saas"
+    if has_strategic_technical_topic(event):
+        if has_title_terms(event, ["agentic", "ai", "artificial intelligence"]):
+            return "ai/agentic"
+        if has_title_terms(event, ["aws", "amazon web services", "azure", "cloud", "devops"]):
+            return "cloud/devops"
+        if has_title_terms(event, ["cybersecurity", "cyber security"]):
+            return "cybersecurity"
+        return "strategic technical"
+    if has_startup_founder_topic(event):
+        return "startup/founder"
     if is_generic_networking(event):
         return "generic networking"
     return "technology/business"
 
 
+def weighted_field_score(event: Event, terms: dict[str, int]) -> int:
+    title, location, summary = event_field_text(event)
+    return (
+        sum(weight * 4 for _, weight in matching_terms(title, terms))
+        + sum(weight * 2 for _, weight in matching_terms(location, terms))
+        + sum(weight for _, weight in matching_terms(summary, terms))
+    )
+
+
 def score_event(event: Event) -> int:
-    """Return a simple 1-10 business-development relevance score."""
-    haystack = event_text(event)
-    raw_score = 18
-    raw_score += sum(weight for _, weight in matching_terms(haystack, STRATEGIC_TERMS))
-    raw_score += sum(weight for _, weight in matching_terms(haystack, TARGET_CITIES))
-    raw_score += sum(weight for _, weight in matching_terms(haystack, AUDIENCE_TERMS))
-    raw_score += sum(weight for _, weight in matching_terms(haystack, BUSINESS_VALUE_TERMS))
-    raw_score += sum(weight for _, weight in matching_terms(haystack, LOW_VALUE_TERMS))
+    """Return a directional 1-10 business-development relevance score."""
+    title, location, summary = event_field_text(event)
+    raw_score = 12
+    raw_score += weighted_field_score(event, STRATEGIC_TERMS)
+    raw_score += weighted_field_score(event, AUDIENCE_TERMS)
+    raw_score += weighted_field_score(event, BUSINESS_VALUE_TERMS)
+    raw_score += weighted_field_score(event, LOW_VALUE_TERMS)
+    raw_score += sum(weight * 2 for _, weight in matching_terms(location, TARGET_CITIES))
 
-    senior_terms = ["cto", "cpo", "cio", "ciso", "chief ", "vp", "vice president", "director", "founder", "executive", "leadership", "investor", "buyer", "decision maker"]
-    cloud_relationship_terms = ["aws", "amazon web services", "azure", "partner", "partnership", "enterprise", "customer", "client"]
-    hot_delivery_terms = ["ai", "artificial intelligence", "agentic", "agent", "cloud", "cybersecurity", "cyber security", "devops", "data", "engineering", "product", "saas"]
+    executive = has_executive_audience(event)
+    strategic = has_strategic_technical_topic(event)
+    startup = has_startup_founder_topic(event)
+    generic = is_generic_networking(event)
 
-    if any(term in haystack for term in senior_terms):
-        raw_score += 16
-    if any(term in haystack for term in cloud_relationship_terms):
-        raw_score += 7
-    if any(term in haystack for term in hot_delivery_terms):
-        raw_score += 10
-    if is_generic_networking(event):
-        raw_score -= 10
+    if has_title_terms(event, EXECUTIVE_BUYER_TERMS):
+        raw_score += 24
+    elif executive:
+        raw_score += 14
+    if has_title_terms(event, STRATEGIC_TECHNICAL_TERMS):
+        raw_score += 18
+    elif strategic:
+        raw_score += 8
+    if startup and strategic:
+        raw_score += 14
+    elif startup:
+        raw_score += 6
+    if generic:
+        raw_score -= 18
+    if is_recurring_generic_networking(event):
+        raw_score -= 8
     if not event.location.strip():
         raw_score -= 8
-    if not event.summary or len(event.summary) < 80:
-        raw_score -= 4
-    if not any(term in haystack for term in BUSINESS_VALUE_TERMS):
+    if not clean_summary(event) or len(clean_summary(event)) < 80:
         raw_score -= 3
     if event.parsed_date:
         now = datetime.now(timezone.utc)
@@ -313,8 +403,10 @@ def score_event(event: Event) -> int:
         elif event.parsed_date < now - timedelta(days=1):
             raw_score -= 8
 
-    return max(1, min(10, round(raw_score / 10)))
-
+    score = max(1, min(10, round(raw_score / 14)))
+    if generic and not has_title_terms(event, EXECUTIVE_BUYER_TERMS + STRATEGIC_TECHNICAL_TERMS + STARTUP_FOUNDER_TERMS + ["enterprise"]):
+        score = min(score, 6)
+    return score
 
 def keep_event(event: Event) -> bool:
     if not is_event_page(event):
@@ -432,68 +524,105 @@ def format_date(event: Event) -> str:
     return (event.date_text or "Date/time not listed") + recurring_note
 
 
+def ranking_key(event: Event) -> tuple[int, int, int, int, datetime, str]:
+    """Sort strongest buyer/strategic events ahead of generic networking."""
+    category_priority = 0
+    if has_executive_audience(event):
+        category_priority = 4
+    elif has_strategic_technical_topic(event):
+        category_priority = 3
+    elif has_startup_founder_topic(event):
+        category_priority = 2
+    elif is_generic_networking(event):
+        category_priority = -1
+    title_bonus = 0
+    if has_title_terms(event, EXECUTIVE_BUYER_TERMS):
+        title_bonus += 3
+    if has_title_terms(event, STRATEGIC_TECHNICAL_TERMS):
+        title_bonus += 2
+    if has_title_terms(event, STARTUP_FOUNDER_TERMS) and has_strategic_technical_topic(event):
+        title_bonus += 2
+    if is_recurring_generic_networking(event):
+        title_bonus -= 3
+    return (
+        -category_priority,
+        -event.score,
+        -title_bonus,
+        event.recurring_count if is_generic_networking(event) else 0,
+        event.parsed_date or datetime.max.replace(tzinfo=timezone.utc),
+        event.title.lower(),
+    )
+
+
 def top_recommendations(events: list[Event], limit: int = 3) -> list[Event]:
-    selected: list[Event] = []
-    used_categories: set[str] = set()
-    for event in events:
-        category = event_category(event)
-        if category in used_categories:
-            continue
-        selected.append(event)
-        used_categories.add(category)
-        if len(selected) == limit:
-            return selected
-    for event in events:
-        if event not in selected:
-            selected.append(event)
-        if len(selected) == limit:
-            break
-    return selected
+    stronger_events = [event for event in events if not is_generic_networking(event)]
+    selected = sorted(stronger_events, key=ranking_key)[:limit]
+    if len(selected) < limit:
+        selected.extend(event for event in sorted(events, key=ranking_key) if event not in selected)
+    return selected[:limit]
+
+
+def readable_topics(event: Event) -> list[str]:
+    text = event_text(event)
+    topics: list[str] = []
+    topic_map = [
+        ("AI adoption", ["ai", "artificial intelligence", "agentic"]),
+        ("cloud modernization", ["cloud", "aws", "amazon web services", "azure"]),
+        ("DevOps and platform engineering", ["devops", "engineering"]),
+        ("cybersecurity", ["cybersecurity", "cyber security"]),
+        ("data strategy", ["data", "analytics"]),
+        ("SaaS growth", ["saas"]),
+        ("fintech", ["fintech"]),
+        ("startup growth", ["startup", "startups", "founder", "vc", "venture capital"]),
+    ]
+    for label, terms in topic_map:
+        if contains_any(text, terms) and label not in topics:
+            topics.append(label)
+    return topics[:3]
+
+
+def join_naturally(items: list[str]) -> str:
+    if not items:
+        return "technology priorities"
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])}, and {items[-1]}"
 
 
 def why_this_matters(event: Event) -> str:
-    haystack = event_text(event)
-    strategic = [term for term, _ in matching_terms(haystack, STRATEGIC_TERMS)[:4]]
-    audience = [term for term, _ in matching_terms(haystack, AUDIENCE_TERMS)[:3]]
-    value_terms = [term for term, _ in matching_terms(haystack, BUSINESS_VALUE_TERMS)[:3]]
-    city = next((city.title() for city in TARGET_CITIES if city in haystack), event.location or "South Florida")
-    title_context = event.title.strip()
+    city = next((city.title() for city in TARGET_CITIES if city in event.location.lower() or city in event.title.lower()), event.location or "South Florida")
+    topics = join_naturally(readable_topics(event))
+    recurring_note = " Because it appears to be recurring, treat this as a repeatable coverage opportunity rather than a one-time executive commitment." if event.recurring_count > 1 else ""
 
-    if any(term in haystack for term in ["aws", "amazon web services", "azure", "cloud"]):
-        angle = "AWS/Azure modernization, migration, and managed-cloud conversations"
-    elif any(term in haystack for term in ["agentic", "ai", "artificial intelligence"]):
-        angle = "AI delivery, agentic workflow, data readiness, and governance offers"
-    elif any(term in haystack for term in ["cybersecurity", "cyber security", "devops"]):
-        angle = "secure DevOps, cloud security, and compliance-led consulting conversations"
-    elif any(term in haystack for term in ["founder", "startup", "startups", "vc", "venture capital", "saas"]):
-        angle = "founder, SaaS, and investor relationships that can create cloud architecture or fractional engineering demand"
-    elif any(term in haystack for term in ["enterprise", "cto", "cio", "cpo", "product", "engineering"]):
-        angle = "enterprise technology leadership networking and account-development discovery"
-    else:
-        angle = "local relationship-building, but the buyer fit should be validated before committing senior time"
-
-    recurring_note = " This appears to be a recurring event, so the digest shows only the next listed instance." if event.recurring_count > 1 else ""
-    if strategic or audience or value_terms:
-        audience_text = "senior technology and product leaders" if audience else "technology-minded attendees"
-        service_text = ", ".join(strategic[:3]) if strategic else "cloud, AI, data, or engineering"
-        return f"{title_context} is worth prioritizing because it likely brings together {audience_text} around {service_text} needs in {city}. Best angle: {angle}.{recurring_note}"
-    return f"{title_context} has limited listing detail. Use it only if the attendee list confirms cloud, AI, SaaS, cybersecurity, startup, or enterprise technology buyers."
+    if has_executive_audience(event):
+        return f"This is a strong fit because it is likely to bring senior product, technology, or business leaders together in {city}. That audience is well suited for conversations about {topics}, delivery capacity, and modernization priorities.{recurring_note}"
+    if has_strategic_technical_topic(event) and has_startup_founder_topic(event):
+        return f"This should rank highly because it combines {topics} with a founder or startup audience in {city}. It is a practical setting for discussing cloud architecture, AI implementation, and engineering support with teams that may be making near-term build decisions.{recurring_note}"
+    if has_strategic_technical_topic(event):
+        return f"This is relevant because the agenda is tied to {topics}, which maps directly to cloud consulting, AI delivery, security, data, and platform modernization conversations in {city}.{recurring_note}"
+    if has_startup_founder_topic(event):
+        return f"This is useful for founder and startup relationship-building in {city}, especially if attendee conversations point to SaaS, fintech, cloud, AI, or enterprise technology needs.{recurring_note}"
+    if is_generic_networking(event):
+        return f"This looks like broad networking in {city}. It can still create local relationships, but it should be covered by an account executive and should not take priority over executive, AI, cloud, or focused startup events.{recurring_note}"
+    return f"The listing has limited strategic detail. Validate the attendee profile before committing time, and prioritize it only if cloud, AI, SaaS, cybersecurity, startup, or enterprise technology buyers are expected."
 
 
 def suggested_action(event: Event) -> str:
-    haystack = event_text(event)
-    if any(term in haystack for term in ["cto", "cpo", "cio", "ciso", "founder", "executive", "chief ", "leadership"]):
-        return "Attend personally" if event.score >= 8 else "Send senior AE"
-    if event.score >= 8 and any(term in haystack for term in ["conference", "summit", "aws", "azure", "enterprise"]):
-        return "Explore sponsorship"
-    if has_strategic_technical_topic(event):
-        return "Send technical person"
-    if is_generic_networking(event):
+    if is_recurring_generic_networking(event) and not has_title_terms(event, EXECUTIVE_BUYER_TERMS + STARTUP_FOUNDER_TERMS + ["enterprise"]):
         return "Send AE" if event.score >= 5 else "Track only"
+    if is_generic_networking(event):
+        return "Send AE"
+    if has_executive_audience(event) and event.score >= 7:
+        return "Attend personally"
+    if has_strategic_technical_topic(event) or has_startup_founder_topic(event):
+        if event.score >= 6:
+            return "Send technical person" if has_strategic_technical_topic(event) else "Send senior AE"
+        return "Send AE"
     if event.score >= 5:
         return "Send AE"
     return "Track only"
-
 
 def write_event_sections(lines: list[str], events: list[Event], fallback: bool = False) -> None:
     if fallback:
@@ -641,7 +770,7 @@ def main() -> None:
     diagnostics.events_after_filtering = len(events_by_id)
     unique_events = deduplicate_recurring_events(list(events_by_id.values()))
     diagnostics.events_after_deduplication = len(unique_events)
-    events = sorted(unique_events, key=lambda event: (-event.score, event.parsed_date or datetime.max.replace(tzinfo=timezone.utc), event.title.lower()))[:25]
+    events = sorted(unique_events, key=ranking_key)[:25]
     fallback_events: list[Event] = []
     if events:
         save_last_successful_events(events)
