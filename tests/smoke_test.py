@@ -45,6 +45,58 @@ def test_generic_non_event_pages_are_filtered_out() -> None:
     assert not main.keep_event(generic)
 
 
+def test_ranking_prioritizes_executive_and_ai_events_over_generic_networking() -> None:
+    generic = make_event(
+        "Crowded Mondays — Network • Discuss • Connect",
+        summary="Weekly recurring meetup for broad community networking and connecting with local professionals.",
+        date_text="July 6, 2026",
+    )
+    generic.recurring_count = 4
+    generic.score = main.score_event(generic)
+
+    breakfast = make_event(
+        "CTO/CPO Breakfast",
+        summary="Breakfast for CTOs, CPOs, product leaders, and engineering leaders discussing cloud modernization and AI adoption.",
+        date_text="July 8, 2026",
+    )
+    fintech = make_event(
+        "Fort Lauderdale Tech Meetup • Building an AI-first Fintech Startup",
+        summary="Founders and builders discuss AI-first fintech startup architecture, cloud platforms, SaaS growth, and engineering decisions.",
+        date_text="July 9, 2026",
+    )
+    agentic = make_event(
+        "Agentic Workflow Automation on AWS",
+        summary="Technical discussion of agentic AI workflows, cloud deployment, data readiness, and AWS modernization.",
+        date_text="July 11, 2026",
+    )
+    fintech.location = "Fort Lauderdale, FL"
+    fintech.score = main.score_event(fintech)
+    agentic.score = main.score_event(agentic)
+
+    top_titles = [event.title for event in main.top_recommendations([generic, breakfast, fintech, agentic])]
+
+    assert "Crowded Mondays — Network • Discuss • Connect" not in top_titles
+    assert top_titles[0] == "CTO/CPO Breakfast"
+    assert "Fort Lauderdale Tech Meetup • Building an AI-first Fintech Startup" in top_titles
+    assert generic.score <= 6
+    assert main.suggested_action(generic) in {"Send AE", "Track only"}
+    assert main.suggested_action(generic) != "Attend personally"
+
+
+def test_why_this_matters_uses_natural_executive_language() -> None:
+    event = make_event(
+        "Fort Lauderdale Tech Meetup • Building an AI-first Fintech Startup",
+        summary="Founders discuss AI, fintech, cloud architecture, SaaS product delivery, and startup growth.",
+    )
+    event.location = "Fort Lauderdale, FL"
+    rationale = main.why_this_matters(event)
+
+    assert "around ai" not in rationale.lower()
+    assert "matches priority services" not in rationale.lower()
+    assert "signals buyer-adjacent" not in rationale.lower()
+    assert "This should rank highly" in rationale
+
+
 def test_fallback_cache_works_when_all_sources_fail(tmp_path, monkeypatch) -> None:
     cache_file = tmp_path / "last_successful_events.json"
     output_file = tmp_path / "weekly_digest.md"
@@ -75,6 +127,8 @@ def test_fallback_cache_works_when_all_sources_fail(tmp_path, monkeypatch) -> No
 if __name__ == "__main__":
     test_recurring_events_are_deduplicated()
     test_generic_non_event_pages_are_filtered_out()
+    test_ranking_prioritizes_executive_and_ai_events_over_generic_networking()
+    test_why_this_matters_uses_natural_executive_language()
 
     class MonkeyPatch:
         def setattr(self, obj, name, value):
