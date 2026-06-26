@@ -459,5 +459,45 @@ def test_candidates_to_review_are_limited_for_readability(tmp_path, monkeypatch)
     main.write_digest([], [], diagnostics, market=market, candidates=candidates)
 
     digest = (tmp_path / "output" / "south_florida_weekly_digest.md").read_text(encoding="utf-8")
-    assert digest.count("- **Title:** Miami AI Review Candidate") == 10
+    assert digest.count("- **Title:** Miami AI Review Candidate") == 5
     assert "Additional candidates were found but hidden for readability." in digest
+
+
+def test_past_and_stale_events_are_discarded_from_quality_gates() -> None:
+    run_date = main.datetime(2026, 6, 26, tzinfo=main.timezone.utc)
+    market = {"id": "south_florida", "name": "South Florida", "cities": ["Miami"]}
+    past = make_event("Miami AI Summit", date_text="September 24, 2025")
+    stale = make_event("Miami AI Summit 2025 Recap", date_text="July 10, 2026")
+
+    assert not main.apply_date_quality(past, run_date)
+    assert not main.promote_search_event(past, market, run_date)
+    assert not main.apply_date_quality(stale, run_date)
+
+
+def test_uncertain_missing_year_date_stays_review_only() -> None:
+    run_date = main.datetime(2026, 6, 26, tzinfo=main.timezone.utc)
+    market = {"id": "south_florida", "name": "South Florida", "cities": ["Miami"]}
+    event = make_event("Miami AI Founder Roundtable", date_text="March 10")
+    event.confidence = "medium"
+    event.score = 8
+
+    assert main.apply_date_quality(event, run_date, allow_uncertain_review=True)
+    assert main.eligible_for_candidate_review_date(event, run_date)
+    assert not main.promote_search_event(event, market, run_date)
+    assert not main.eligible_for_high_priority_verification(event, market, run_date)
+
+
+def test_eventbrite_recurring_keeps_nearest_future_instance() -> None:
+    run_date = main.datetime(2026, 6, 26, tzinfo=main.timezone.utc)
+    past = make_event("AI & Tech Networking Tel Aviv - 10/21/2025", date_text="October 21, 2025")
+    future = make_event("AI & Tech Networking Tel Aviv - 07/29/2026", date_text="July 29, 2026")
+    later = make_event("AI & Tech Networking Tel Aviv - 08/15/2026", date_text="August 15, 2026")
+    for event in [past, future, later]:
+        event.market_id = "tel_aviv"
+        event.url = "https://www.eventbrite.com/e/ai-tech-networking-tel-aviv-tickets-123"
+
+    filtered = [event for event in [past, future, later] if main.apply_date_quality(event, run_date)]
+    deduped = main.deduplicate_recurring_events(filtered)
+
+    assert len(deduped) == 1
+    assert deduped[0].parsed_date.date().isoformat() == "2026-07-29"

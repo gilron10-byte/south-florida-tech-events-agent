@@ -1,6 +1,6 @@
 # Global Tech Events Weekly Summary
 
-Generated: 2026-06-25 23:26 UTC
+Generated: 2026-06-26 00:43 UTC
 
 ## South Florida
 
@@ -8,7 +8,7 @@ Full digest: `output/south_florida_weekly_digest.md`
 
 ### Top 3
 
-No verified Top 3
+No verified upcoming events found.
 
 ### Diagnostics summary
 - Sources fetched: 0
@@ -23,7 +23,7 @@ Full digest: `output/new_york_weekly_digest.md`
 
 ### Top 3
 
-No verified Top 3
+No verified upcoming events found.
 
 ### Diagnostics summary
 - Sources fetched: 0
@@ -38,7 +38,7 @@ Full digest: `output/tel_aviv_weekly_digest.md`
 
 ### Top 3
 
-No verified Top 3
+No verified upcoming events found.
 
 ### Diagnostics summary
 - Sources fetched: 0

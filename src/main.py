@@ -99,6 +99,12 @@ class RunDiagnostics:
     blocked_generic_page: int = 0
     promoted_to_main_digest: int = 0
     high_priority_candidates_to_verify: int = 0
+    discarded_past_date: int = 0
+    discarded_stale_year: int = 0
+    discarded_uncertain_date: int = 0
+    discarded_historical_content: int = 0
+    verified_future_events_found: int = 0
+    high_priority_future_candidates_found: int = 0
     blocked_only_missing_location: int = 0
     promoted_to_high_priority_verification: int = 0
     high_priority_candidates: list[Event] = field(default_factory=list)
@@ -151,14 +157,92 @@ def first_link(card: Any, source_url: str, selector: str | None = None) -> str:
     return source_url
 
 
-def parse_date(date_text: str) -> datetime | None:
+def parse_date(date_text: str, reference: datetime | None = None) -> datetime | None:
     if not date_text:
         return None
+    reference = reference or datetime.now(timezone.utc)
+    default = reference.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
     try:
-        parsed = date_parser.parse(date_text, fuzzy=True)
+        parsed = date_parser.parse(date_text, fuzzy=True, default=default)
     except (ValueError, OverflowError, TypeError):
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def text_has_explicit_year(text: str) -> bool:
+    return bool(re.search(r"\b20\d{2}\b", text or ""))
+
+
+def date_text_has_year(date_text: str) -> bool:
+    return text_has_explicit_year(date_text)
+
+
+def clearly_upcoming_without_year(event: Event, run_date: datetime) -> bool:
+    text = f"{event.title} {event.url} {event.summary} {event.date_text}".lower()
+    return any(term in text for term in ["upcoming", "register", "tickets", "save the date", "rsvp", "join us", "next ", str(run_date.year + 1)])
+
+
+def infer_event_date(event: Event, run_date: datetime) -> tuple[datetime | None, bool]:
+    parsed = event.parsed_date or parse_date(event.date_text, run_date)
+    if not parsed:
+        return None, bool(event.date_text)
+    if date_text_has_year(event.date_text):
+        return parsed, False
+    if parsed.date() < run_date.date():
+        if clearly_upcoming_without_year(event, run_date):
+            return parsed.replace(year=run_date.year + 1), False
+        return parsed, True
+    return parsed, False
+
+
+STALE_OR_HISTORICAL_TERMS = ["recap", "highlights from", "lessons learned", "recording", "youtube recap", "agenda 2025"]
+
+
+def stale_or_historical_reasons(event: Event, run_date: datetime) -> tuple[bool, bool]:
+    text = f"{event.title} {event.url} {event.summary}".lower()
+    stale_years = [str(y) for y in range(2023, run_date.year) if y != run_date.year]
+    return any(y in text for y in stale_years), any(term in text for term in STALE_OR_HISTORICAL_TERMS)
+
+
+def has_stale_or_historical_content(event: Event, run_date: datetime) -> bool:
+    stale_year, historical = stale_or_historical_reasons(event, run_date)
+    return stale_year or historical
+
+
+def is_future_event(event: Event, run_date: datetime | None = None) -> bool:
+    run_date = run_date or datetime.now(timezone.utc)
+    parsed, uncertain = infer_event_date(event, run_date)
+    return bool(parsed and not uncertain and parsed.date() >= run_date.date())
+
+
+
+def eligible_for_candidate_review_date(event: Event, run_date: datetime) -> bool:
+    if has_stale_or_historical_content(event, run_date):
+        return False
+    parsed, uncertain = infer_event_date(event, run_date)
+    if parsed:
+        event.parsed_date = parsed
+    if uncertain:
+        return True
+    return not parsed or parsed.date() >= run_date.date()
+
+def apply_date_quality(event: Event, run_date: datetime, diagnostics: RunDiagnostics | None = None, allow_uncertain_review: bool = False) -> bool:
+    stale_year, historical = stale_or_historical_reasons(event, run_date)
+    if stale_year or historical:
+        if diagnostics:
+            if stale_year: diagnostics.discarded_stale_year += 1
+            if historical: diagnostics.discarded_historical_content += 1
+        return False
+    parsed, uncertain = infer_event_date(event, run_date)
+    if parsed:
+        event.parsed_date = parsed
+    if uncertain:
+        if diagnostics: diagnostics.discarded_uncertain_date += 1
+        return allow_uncertain_review
+    if parsed and parsed.date() < run_date.date():
+        if diagnostics: diagnostics.discarded_past_date += 1
+        return False
+    return True
 
 
 def fetch_source(source: dict[str, Any], market: dict[str, Any] | None = None) -> list[Event]:
@@ -438,7 +522,8 @@ def is_generic_directory_or_resource_page(event: Event) -> bool:
     return False
 
 
-def keep_event(event: Event, market: dict[str, Any] | None = None) -> bool:
+def keep_event(event: Event, market: dict[str, Any] | None = None, run_date: datetime | None = None) -> bool:
+    if run_date and not apply_date_quality(event, run_date): return False
     if not is_event_page(event): return False
     if market and (has_wrong_market(event, market) or not market_match(event, market)): return False
     haystack = event_text(event)
@@ -461,8 +546,10 @@ def review_reason(event: Event) -> str:
     return "Possible event found by broad discovery; review manually before using."
 
 
-def candidate_block_reasons(event: Event, market: dict[str, Any]) -> list[str]:
+def candidate_block_reasons(event: Event, market: dict[str, Any], run_date: datetime | None = None) -> list[str]:
     reasons: list[str] = []
+    if run_date and not is_future_event(event, run_date):
+        reasons.append("past, stale, or uncertain date")
     if not event.location:
         reasons.append("missing/invalid location")
     if has_wrong_market(event, market) or not market_match(event, market):
@@ -512,8 +599,10 @@ def high_priority_verification_reason(event: Event, market: dict[str, Any]) -> s
     return f"The {evidence} clearly ties this result to {market.get('name', event.market_id)}, it {date_note}, and its {topics} focus scores strongly enough to warrant manual location verification."
 
 
-def eligible_for_high_priority_verification(event: Event, market: dict[str, Any]) -> bool:
+def eligible_for_high_priority_verification(event: Event, market: dict[str, Any], run_date: datetime | None = None) -> bool:
     normalize_event_location(event)
+    if run_date and not apply_date_quality(event, run_date):
+        return False
     if event.location:
         return False
     if event.confidence not in {"high", "medium"}:
@@ -544,8 +633,9 @@ def candidate_bucket(event: Event) -> str:
     return "Other search discovery"
 
 
-def promote_search_event(event: Event, market: dict[str, Any]) -> bool:
+def promote_search_event(event: Event, market: dict[str, Any], run_date: datetime | None = None) -> bool:
     normalize_event_location(event)
+    if run_date and not apply_date_quality(event, run_date): return False
     if event.confidence == "low": return False
     if event.score < 6 or not is_event_page(event): return False
     if not event.title or not event.url: return False
@@ -556,8 +646,9 @@ def promote_search_event(event: Event, market: dict[str, Any]) -> bool:
     return market_match(event, market)
 
 
-def eligible_for_top3(event: Event, market: dict[str, Any] | None = None) -> bool:
+def eligible_for_top3(event: Event, market: dict[str, Any] | None = None, run_date: datetime | None = None) -> bool:
     normalize_event_location(event)
+    if run_date and not is_future_event(event, run_date): return False
     if event.confidence == "low" or event.is_candidate: return False
     if event.source != "Eventbrite via Search" and event.discovery_group == "Primary sources": return True
     if not (event.date_text or event.parsed_date) or not event.location: return False
@@ -679,8 +770,8 @@ def has_real_location(event: Event) -> bool:
     return bool(location and location != "location not listed")
 
 
-def top_recommendations(events: list[Event], limit: int = 3, market: dict[str, Any] | None = None) -> list[Event]:
-    eligible=[e for e in events if eligible_for_top3(e, market)]
+def top_recommendations(events: list[Event], limit: int = 3, market: dict[str, Any] | None = None, run_date: datetime | None = None) -> list[Event]:
+    eligible=[e for e in events if eligible_for_top3(e, market, run_date)]
     strategic=[e for e in eligible if not is_generic_networking(e)]
     pool=strategic or eligible
     ranked=sorted(pool,key=ranking_key)
@@ -766,7 +857,7 @@ def write_event_sections(lines: list[str], events: list[Event], candidates: list
     if candidates is not None:
         lines += ["## Candidates to review", ""]
         if not candidates: lines += ["No low-confidence search candidates were retained for manual review.", ""]
-        visible_candidates = candidates[:50]
+        visible_candidates = candidates[:20]
         hidden_for_readability = len(candidates) > len(visible_candidates)
         buckets: dict[str,list[Event]]={}
         for c in visible_candidates: buckets.setdefault(candidate_bucket(c), []).append(c)
@@ -775,9 +866,9 @@ def write_event_sections(lines: list[str], events: list[Event], candidates: list
             items=buckets.get(bucket, [])
             if not items: continue
             lines += [f"### {bucket}", ""]
-            if len(items) > 10:
+            if len(items) > 5:
                 hidden_for_readability = True
-            for c in items[:10]:
+            for c in items[:5]:
                 lines += [f"- **Title:** {c.title}", f"  - **URL:** {c.url}", f"  - **Source / discovery group:** {c.source} / {c.discovery_group}", f"  - **Confidence:** {c.confidence}", f"  - **Market:** {(market or {}).get('name', c.market_id)}", f"  - **Reason to review:** {c.review_reason or review_reason(c)}", f"  - **Missing fields:** {', '.join(c.missing_fields or missing_fields(c)) or 'None'}", "  - **Suggested action:** Review manually", ""]
         if hidden_for_readability:
             lines += ["Additional candidates were found but hidden for readability.", ""]
@@ -801,10 +892,12 @@ def write_digest(events: list[Event], errors: list[str], diagnostics: RunDiagnos
     else:
         reason="One or more sources failed or were skipped, and no fallback cache was available." if diagnostics.sources_skipped else "All enabled sources were fetched, but no qualifying events were found."
         lines += ["## Run status", "", "No qualifying business-development events were found in this run.", f"Reason: {reason}", ""]
+        if candidates:
+            lines += [f"No verified events found. {len(candidates)} candidates require manual review.", ""]
         write_event_sections(lines, [], candidates or [], diagnostics.high_priority_candidates, market=market)
     lines += ["## Sources", "", "Edit `markets.yaml` to add or remove market-specific public event pages and search discovery groups."]
     if errors: lines += ["", "## Source notes", ""] + [f"- {e}" for e in errors] + [""]
-    lines += ["## Run diagnostics", "", f"- **Market name:** {diagnostics.market_name}", f"- **Sources fetched successfully:** {', '.join(diagnostics.sources_fetched_successfully) if diagnostics.sources_fetched_successfully else 'None'}", f"- **Sources skipped:** {', '.join(diagnostics.sources_skipped) if diagnostics.sources_skipped else 'None'}", f"- **Search discovery groups enabled/disabled:** {'enabled' if os.environ.get('SEARCH_API_KEY','').strip() else 'disabled'}", f"- **Search API endpoint host:** {diagnostics.search_api_endpoint_host}", f"- **Number of search queries attempted:** {diagnostics.search_queries_attempted}", f"- **Number of search API responses received:** {diagnostics.search_api_responses_received}", f"- **Number of Eventbrite URLs found before filtering:** {diagnostics.eventbrite_urls_found_before_filtering}", f"- **Number of Eventbrite candidates found:** {diagnostics.eventbrite_candidates_found}", f"- **Number of raw events found:** {diagnostics.raw_events_found}", f"- **Number of events after filtering:** {diagnostics.events_after_filtering}", f"- **Number of events after deduplication:** {diagnostics.events_after_deduplication}", f"- **Candidates blocked due to missing/invalid location:** {diagnostics.blocked_missing_invalid_location}", f"- **Candidates blocked due to wrong market:** {diagnostics.blocked_wrong_market}", f"- **Candidates blocked due to low confidence:** {diagnostics.blocked_low_confidence}", f"- **Candidates blocked because they were generic directory/resource pages:** {diagnostics.blocked_generic_page}", f"- **Candidates promoted to main digest:** {diagnostics.promoted_to_main_digest}", f"- **High-priority candidates to verify count:** {diagnostics.high_priority_candidates_to_verify}", f"- **Candidates blocked only because of missing location:** {diagnostics.blocked_only_missing_location}", f"- **Candidates promoted to high-priority verification:** {diagnostics.promoted_to_high_priority_verification}", f"- **Eventbrite direct scraping:** {diagnostics.eventbrite_direct_scraping}", f"- **Eventbrite search discovery:** {diagnostics.eventbrite_search_discovery}", f"- **Fallback cache was used:** {'Yes' if diagnostics.fallback_cache_used else 'No'}"]
+    lines += ["## Run diagnostics", "", f"- **Market name:** {diagnostics.market_name}", f"- **Sources fetched successfully:** {', '.join(diagnostics.sources_fetched_successfully) if diagnostics.sources_fetched_successfully else 'None'}", f"- **Sources skipped:** {', '.join(diagnostics.sources_skipped) if diagnostics.sources_skipped else 'None'}", f"- **Search discovery groups enabled/disabled:** {'enabled' if os.environ.get('SEARCH_API_KEY','').strip() else 'disabled'}", f"- **Search API endpoint host:** {diagnostics.search_api_endpoint_host}", f"- **Number of search queries attempted:** {diagnostics.search_queries_attempted}", f"- **Number of search API responses received:** {diagnostics.search_api_responses_received}", f"- **Number of Eventbrite URLs found before filtering:** {diagnostics.eventbrite_urls_found_before_filtering}", f"- **Number of Eventbrite candidates found:** {diagnostics.eventbrite_candidates_found}", f"- **Number of raw events found:** {diagnostics.raw_events_found}", f"- **Number of events after filtering:** {diagnostics.events_after_filtering}", f"- **Number of events after deduplication:** {diagnostics.events_after_deduplication}", f"- **Candidates blocked due to missing/invalid location:** {diagnostics.blocked_missing_invalid_location}", f"- **Candidates blocked due to wrong market:** {diagnostics.blocked_wrong_market}", f"- **Candidates blocked due to low confidence:** {diagnostics.blocked_low_confidence}", f"- **Candidates blocked because they were generic directory/resource pages:** {diagnostics.blocked_generic_page}", f"- **Candidates promoted to main digest:** {diagnostics.promoted_to_main_digest}", f"- **High-priority candidates to verify count:** {diagnostics.high_priority_candidates_to_verify}", f"- **Candidates blocked only because of missing location:** {diagnostics.blocked_only_missing_location}", f"- **Candidates promoted to high-priority verification:** {diagnostics.promoted_to_high_priority_verification}", f"- **Eventbrite direct scraping:** {diagnostics.eventbrite_direct_scraping}", f"- **Eventbrite search discovery:** {diagnostics.eventbrite_search_discovery}", f"- **Events discarded because date is in the past:** {diagnostics.discarded_past_date}", f"- **Events discarded because year is stale:** {diagnostics.discarded_stale_year}", f"- **Events discarded because date parsing was uncertain:** {diagnostics.discarded_uncertain_date}", f"- **Events discarded because source looked like recap/historical content:** {diagnostics.discarded_historical_content}", f"- **Verified future events found:** {diagnostics.verified_future_events_found}", f"- **High-priority future candidates found:** {diagnostics.high_priority_future_candidates_found}", f"- **Primary source cache used:** {'Yes' if diagnostics.fallback_cache_used else 'No'}", f"- **Fallback cache was used:** {'Yes' if diagnostics.fallback_cache_used else 'No'}"]
     if diagnostics.fallback_reason: lines.append(f"- **Fallback reason:** {diagnostics.fallback_reason}")
     lines += ["", "### Discovery group diagnostics", ""]
     if diagnostics.group_stats:
@@ -820,6 +913,7 @@ def source_note(source: dict[str, Any], exc: requests.RequestException) -> str:
 
 
 def process_market(market: dict[str, Any], seen_event_ids: set[str]) -> tuple[list[Event], list[Event], RunDiagnostics]:
+    run_date=datetime.now(timezone.utc)
     errors=[]; diagnostics=RunDiagnostics([], [], market_name=market["name"]); events_by_id={}; candidates_by_id={}
     sources=list(market.get("primary_sources", [])) + list(market.get("discovery_groups", []))
     for source in sources:
@@ -832,8 +926,11 @@ def process_market(market: dict[str, Any], seen_event_ids: set[str]) -> tuple[li
             for e in fetched:
                 normalize_event_location(e)
                 e.score=score_event(e, market); e.market_id=market["id"]; e.missing_fields=missing_fields(e); e.review_reason=review_reason(e)
-                block_reasons = candidate_block_reasons(e, market)
-                if promote_search_event(e, market) and keep_event(e, market) and e.event_id not in seen_event_ids:
+                if not apply_date_quality(e, run_date, diagnostics, allow_uncertain_review=True):
+                    stats["discarded"]=stats.get("discarded",0)+1
+                    continue
+                block_reasons = candidate_block_reasons(e, market, run_date)
+                if promote_search_event(e, market, run_date) and keep_event(e, market, run_date) and e.event_id not in seen_event_ids:
                     events_by_id[e.event_id]=e; stats["main"]=stats.get("main",0)+1
                     diagnostics.promoted_to_main_digest += 1
                 else:
@@ -841,7 +938,7 @@ def process_market(market: dict[str, Any], seen_event_ids: set[str]) -> tuple[li
                     if block_reasons:
                         e.review_reason = "Blocked from Prioritized Events: " + "; ".join(block_reasons) + "."
                         apply_block_diagnostics(block_reasons, diagnostics)
-                    if eligible_for_high_priority_verification(e, market):
+                    if eligible_for_high_priority_verification(e, market, run_date):
                         e.review_reason = high_priority_verification_reason(e, market)
                         diagnostics.promoted_to_high_priority_verification += 1
                     candidates_by_id[e.event_id]=e; stats["review"]=stats.get("review",0)+1
@@ -854,22 +951,26 @@ def process_market(market: dict[str, Any], seen_event_ids: set[str]) -> tuple[li
         for e in fetched:
             normalize_event_location(e)
             e.score=score_event(e, market)
-            if e.event_id not in seen_event_ids and keep_event(e, market): events_by_id[e.event_id]=e
+            if not apply_date_quality(e, run_date, diagnostics): continue
+            if e.score >= 6 and e.confidence in {"high", "medium"} and has_real_location(e) and e.event_id not in seen_event_ids and keep_event(e, market, run_date): events_by_id[e.event_id]=e
     diagnostics.events_after_filtering=len(events_by_id)
     unique=deduplicate_recurring_events(list(events_by_id.values()))
     diagnostics.events_after_deduplication=len(unique)
-    events=sorted(unique, key=ranking_key)[:25]
+    events=sorted([e for e in unique if is_future_event(e, run_date) and e.score >= 6 and e.confidence in {"high", "medium"} and has_real_location(e)], key=ranking_key)[:25]
+    diagnostics.verified_future_events_found=len(events)
     cache=ROOT / market.get("cache_file", "data/last_successful_events.json"); fallback=[]
-    if events: save_last_successful_events(events, cache)
+    if events: save_last_successful_events([e for e in events if is_future_event(e, run_date)], cache)
     elif errors or diagnostics.sources_skipped:
-        fallback=load_last_successful_events(cache)
+        fallback=[e for e in load_last_successful_events(cache) if is_future_event(e, run_date)]
         if fallback: diagnostics.fallback_cache_used=True; diagnostics.fallback_reason="No fresh events were found while one or more sources failed or were skipped."
-    high_priority = sorted([c for c in candidates_by_id.values() if eligible_for_high_priority_verification(c, market)], key=ranking_key)[:10]
+        else: diagnostics.fallback_reason="Primary source failed and no verified fallback cache exists."
+    high_priority = sorted([c for c in candidates_by_id.values() if eligible_for_high_priority_verification(c, market, run_date)], key=ranking_key)[:5]
     diagnostics.high_priority_candidates = high_priority
     diagnostics.high_priority_candidates_to_verify = len(high_priority)
+    diagnostics.high_priority_future_candidates_found = len(high_priority)
     diagnostics.promoted_to_high_priority_verification = len(high_priority)
-    review_candidates = [c for c in candidates_by_id.values() if c.event_id not in {h.event_id for h in high_priority}]
-    write_digest(events, errors, diagnostics, fallback, market, sorted(review_candidates, key=ranking_key)[:80])
+    review_candidates = [c for c in candidates_by_id.values() if c.event_id not in {h.event_id for h in high_priority} and eligible_for_candidate_review_date(c, run_date) and c.confidence in {"high", "medium"}]
+    write_digest(events, errors, diagnostics, fallback, market, sorted(review_candidates, key=ranking_key)[:20])
     return events, sorted(candidates_by_id.values(), key=ranking_key), diagnostics
 
 
@@ -882,7 +983,7 @@ def write_global_summary(results: list[tuple[dict[str, Any], list[Event], RunDia
         if top:
             for i,e in enumerate(top,1): lines += [f"{i}. **{e.title}** — {format_date(e, market)} — {e.location or 'Location not listed'} — score {e.score}/10 — {e.url}"]
         else:
-            lines.append("No verified Top 3")
+            lines.append("No verified upcoming events found.")
             if diag.high_priority_candidates:
                 lines += ["", "### High-priority candidates to verify", ""]
                 for i,e in enumerate(diag.high_priority_candidates[:3],1):
