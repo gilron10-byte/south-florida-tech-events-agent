@@ -333,6 +333,13 @@ def test_workflow_uploads_all_markdown_outputs() -> None:
     assert "path: output/*.md" in workflow
 
 
+def test_workflow_keeps_file_based_delivery_only() -> None:
+    workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "weekly-digest.yml").read_text().lower()
+    assert "slack" not in workflow
+    assert "mail" not in workflow
+    assert "search_api_key" in workflow
+
+
 def test_autocomplete_location_is_treated_as_missing() -> None:
     event = main.Event(
         title="Miami AI Founder Summit",
