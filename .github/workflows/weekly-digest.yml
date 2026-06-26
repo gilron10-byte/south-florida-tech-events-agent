@@ -27,7 +27,38 @@ jobs:
           SEARCH_API_URL: ${{ secrets.SEARCH_API_URL }}
         run: python src/main.py
 
+      - name: Send global summary to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -z "${SLACK_WEBHOOK_URL}" ]; then
+            echo "::warning::SLACK_WEBHOOK_URL is not set. Skipping Slack delivery; Markdown digests will still be uploaded as artifacts."
+            exit 0
+          fi
+
+          if [ ! -f output/global_weekly_summary.md ]; then
+            echo "::error::output/global_weekly_summary.md was not generated."
+            exit 1
+          fi
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          summary = Path("output/global_weekly_summary.md").read_text(encoding="utf-8").strip()
+          note = "\n\n_Full market digests are available in this GitHub Actions run's artifacts._"
+          payload = {"text": summary + note}
+          Path("slack_payload.json").write_text(json.dumps(payload), encoding="utf-8")
+          PY
+
+          curl --fail --show-error --silent \
+            --request POST \
+            --header 'Content-type: application/json' \
+            --data @slack_payload.json \
+            "${SLACK_WEBHOOK_URL}"
+
       - name: Upload digest artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: weekly-digest
