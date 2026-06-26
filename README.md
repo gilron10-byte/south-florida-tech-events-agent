@@ -13,11 +13,11 @@ This agent finds public technology events and writes weekly Markdown digests for
   - Candidates to review
   - Source notes
   - Run diagnostics
-- Creates an optional global summary with only each market's Top 3 and a path to the full digest.
+- Creates a global summary with each market's Top 3 and a path to the full market digest.
 - Keeps Eventbrite direct scraping disabled by default because Eventbrite often blocks automated city/category pages.
 - Uses Eventbrite only through `SEARCH_API_KEY`-backed search discovery.
-- Sends the global summary to Slack from GitHub Actions when `SLACK_WEBHOOK_URL` is configured.
-- Does **not** send the full long market digests to Slack yet; those remain in GitHub Actions artifacts.
+- Keeps delivery file-based only: GitHub Actions uploads the generated Markdown files as artifacts.
+- Does **not** send Slack or email notifications.
 
 ## 2. Configured markets
 
@@ -176,36 +176,11 @@ python src/main.py
 Then open the files in `output/`.
 
 
-## 12. Slack delivery
+## 12. File-based delivery only
 
-The GitHub Actions workflow can post the global weekly summary to Slack after it generates the Markdown digests. It sends only `output/global_weekly_summary.md` and adds a note that the full market digests are available in the workflow artifacts.
+Delivery is intentionally file-based only. The workflow generates Markdown files in `output/` and uploads every matching Markdown file as a GitHub Actions artifact.
 
-### Create a Slack incoming webhook
-
-1. In Slack, create or open a Slack app for your workspace.
-2. Enable **Incoming Webhooks** for the app.
-3. Add a new webhook for the channel that should receive the weekly summary.
-4. Copy the webhook URL.
-
-### Add the GitHub repository secret
-
-1. Open the repository on GitHub.
-2. Go to **Settings** → **Secrets and variables** → **Actions**.
-3. Click **New repository secret**.
-4. Name the secret `SLACK_WEBHOOK_URL`.
-5. Paste the Slack webhook URL as the value and save it.
-
-If `SLACK_WEBHOOK_URL` is missing, the workflow prints a clear warning, skips Slack delivery, and still uploads the Markdown artifacts. `SEARCH_API_KEY` and `SEARCH_API_URL` continue to control search discovery exactly as before.
-
-### What Slack receives
-
-Slack receives the contents of:
-
-```text
-output/global_weekly_summary.md
-```
-
-Slack does not receive the full South Florida, New York, or Tel Aviv market digests yet. Download the `weekly-digest` artifact from the completed GitHub Actions run to get all files matching `output/*.md`.
+The workflow does **not** send Slack notifications and does **not** send email notifications. `SEARCH_API_KEY` and `SEARCH_API_URL` behavior is unchanged; they only control optional search discovery as described above.
 
 ## 13. How to run the workflow manually
 
@@ -213,17 +188,39 @@ Slack does not receive the full South Florida, New York, or Tel Aviv market dige
 2. Click **Actions**.
 3. Select **Generate weekly event digest**.
 4. Click **Run workflow**.
-5. Wait for the run to finish.
+5. Keep the branch selection you want to run, then click the green **Run workflow** button.
+6. Wait for the workflow run to finish.
 
-## 14. Where to download artifacts
+## 14. Where to find the generated artifact
 
-The GitHub Actions workflow uploads all Markdown digests as one artifact named `weekly-digest` using:
+The GitHub Actions workflow uploads all generated Markdown digests as one artifact named `weekly-digest` using:
 
 ```text
 output/*.md
 ```
 
-Open the completed workflow run and download the artifact.
+To download it:
+
+1. Open the completed **Generate weekly event digest** workflow run.
+2. Scroll to the **Artifacts** section on the run summary page.
+3. Download the `weekly-digest` artifact.
+4. Unzip the artifact locally.
+
+Open this file first:
+
+```text
+output/global_weekly_summary.md
+```
+
+`global_weekly_summary.md` is the recommended starting point because it summarizes each market's Top 3 recommendations and links you to the full market digest paths. For full details, open the market-specific files:
+
+```text
+output/south_florida_weekly_digest.md
+output/new_york_weekly_digest.md
+output/tel_aviv_weekly_digest.md
+```
+
+The market-specific files contain the full details, including prioritized events, high-priority candidates to verify, candidates to review, source notes, and run diagnostics.
 
 ## 15. How to interpret the digest
 
