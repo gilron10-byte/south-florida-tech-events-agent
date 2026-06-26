@@ -16,7 +16,8 @@ This agent finds public technology events and writes weekly Markdown digests for
 - Creates an optional global summary with only each market's Top 3 and a path to the full digest.
 - Keeps Eventbrite direct scraping disabled by default because Eventbrite often blocks automated city/category pages.
 - Uses Eventbrite only through `SEARCH_API_KEY`-backed search discovery.
-- Does **not** send Slack messages or email.
+- Sends the global summary to Slack from GitHub Actions when `SLACK_WEBHOOK_URL` is configured.
+- Does **not** send the full long market digests to Slack yet; those remain in GitHub Actions artifacts.
 
 ## 2. Configured markets
 
@@ -174,7 +175,39 @@ python src/main.py
 
 Then open the files in `output/`.
 
-## 12. How to run the workflow manually
+
+## 12. Slack delivery
+
+The GitHub Actions workflow can post the global weekly summary to Slack after it generates the Markdown digests. It sends only `output/global_weekly_summary.md` and adds a note that the full market digests are available in the workflow artifacts.
+
+### Create a Slack incoming webhook
+
+1. In Slack, create or open a Slack app for your workspace.
+2. Enable **Incoming Webhooks** for the app.
+3. Add a new webhook for the channel that should receive the weekly summary.
+4. Copy the webhook URL.
+
+### Add the GitHub repository secret
+
+1. Open the repository on GitHub.
+2. Go to **Settings** → **Secrets and variables** → **Actions**.
+3. Click **New repository secret**.
+4. Name the secret `SLACK_WEBHOOK_URL`.
+5. Paste the Slack webhook URL as the value and save it.
+
+If `SLACK_WEBHOOK_URL` is missing, the workflow prints a clear warning, skips Slack delivery, and still uploads the Markdown artifacts. `SEARCH_API_KEY` and `SEARCH_API_URL` continue to control search discovery exactly as before.
+
+### What Slack receives
+
+Slack receives the contents of:
+
+```text
+output/global_weekly_summary.md
+```
+
+Slack does not receive the full South Florida, New York, or Tel Aviv market digests yet. Download the `weekly-digest` artifact from the completed GitHub Actions run to get all files matching `output/*.md`.
+
+## 13. How to run the workflow manually
 
 1. Go to the repository on GitHub.
 2. Click **Actions**.
@@ -182,7 +215,7 @@ Then open the files in `output/`.
 4. Click **Run workflow**.
 5. Wait for the run to finish.
 
-## 13. Where to download artifacts
+## 14. Where to download artifacts
 
 The GitHub Actions workflow uploads all Markdown digests as one artifact named `weekly-digest` using:
 
@@ -192,7 +225,7 @@ output/*.md
 
 Open the completed workflow run and download the artifact.
 
-## 14. How to interpret the digest
+## 15. How to interpret the digest
 
 - **Top 3 Recommendations**: Best market-specific events for action. Each market has its own Top 3.
 - **Recommended next steps**: Suggested coverage plan such as attend personally, send senior AE, send technical person, send AE, track only, or review manually.
@@ -205,7 +238,7 @@ Open the completed workflow run and download the artifact.
   - `low`: search-discovered and missing important details.
 - **Diagnostics**: Shows sources, skipped groups, search queries, candidate counts, cloud provider counts, fallback cache usage, and Eventbrite status.
 
-## 15. How to add AWS / GCP / Microsoft event queries
+## 16. How to add AWS / GCP / Microsoft event queries
 
 Add queries to a market's `Cloud Provider Events` discovery group:
 
